@@ -1,8 +1,5 @@
 #!/usr/bin/python
-
-#Python example for SPI bus, written by Brian Hensley
-#This script will take any amount of Hex values and determine
-#the length and then transfer the data as a string to the "spi" module
+# SPI Interface to DAC MPC4802
 
 import spi
 import time
