@@ -53,7 +53,6 @@ E_DELAY = 0.0005
 
 def main():
   # Initialise display
-  setup_gpio();
   lcd_init()
 
   # Send some test
@@ -90,7 +89,7 @@ def lcd_init():
   lcd_byte(0x28,LCD_CMD)
   lcd_byte(0x0C,LCD_CMD)  
   lcd_byte(0x06,LCD_CMD)
-  lcd_byte(0x01,LCD_CMD)  
+  lcd_clear()  
 
 def lcd_string(message):
   # Send string to display
@@ -99,6 +98,12 @@ def lcd_string(message):
 
   for i in range(LCD_WIDTH):
     lcd_byte(ord(message[i]),LCD_CHR)
+
+def lcd_control(cmd):
+   lcd_byte(cmd,LCD_CMD)
+
+def lcd_clear():
+  lcd_byte(0x01,LCD_CMD)  
 
 def lcd_byte(bits, mode):
   # Send byte to data pins
