@@ -1,0 +1,189 @@
+diff -rp xoscope-2.0.org/gtkdatabox-0.6.0.0/gtk/Makefile.in xoscope-2.0/gtkdatabox-0.6.0.0/gtk/Makefile.in
+*** xoscope-2.0.org/gtkdatabox-0.6.0.0/gtk/Makefile.in	2009-06-26 08:33:52.000000000 +0200
+--- xoscope-2.0/gtkdatabox-0.6.0.0/gtk/Makefile.in	2012-09-15 14:54:38.918542369 +0200
+*************** AM_CFLAGS = \
+*** 196,202 ****
+  			-DG_DISABLE_DEPRECATED\
+  			-DGDK_DISABLE_DEPRECATED\
+  			-DGDK_PIXBUF_DISABLE_DEPRECATED\
+- 			-DGTK_DISABLE_DEPRECATED\
+  			`pkg-config gtk+-2.0 --cflags`
+  
+  all: all-am
+--- 196,201 ----
+Only in xoscope-2.0: interface.o
+Only in xoscope-2.0: Makefile
+Only in xoscope-2.0: operl
+diff -rp xoscope-2.0.org/oscope.c xoscope-2.0/oscope.c
+*** xoscope-2.0.org/oscope.c	2009-01-15 04:57:20.000000000 +0100
+--- xoscope-2.0/oscope.c	2012-09-09 21:00:08.712617386 +0200
+*************** extern DataSrc datasrc_esd;
+*** 29,34 ****
+--- 29,35 ----
+  #ifdef HAVE_LIBCOMEDI
+  extern DataSrc datasrc_comedi;
+  #endif
++ extern DataSrc datasrc_spi;
+  
+  DataSrc *datasrcs[] = {
+  #ifdef HAVE_LIBCOMEDI
+*************** DataSrc *datasrcs[] = {
+*** 38,43 ****
+--- 39,45 ----
+    &datasrc_esd,
+  #endif
+    &datasrc_sc,
++   &datasrc_spi,
+    &datasrc_ps,
+    &datasrc_bs
+  };
+Only in xoscope-2.0: oscope.o
+Only in xoscope-2.0: proscope.o
+Only in xoscope-2.0: realfft.o
+diff -rp xoscope-2.0.org/sc_linux.c xoscope-2.0/sc_linux.c
+*** xoscope-2.0.org/sc_linux.c	2009-06-26 07:18:48.000000000 +0200
+--- xoscope-2.0/sc_linux.c	2012-09-15 12:36:38.654626761 +0200
+*************** DataSrc datasrc_sc = {
+*** 603,605 ****
+--- 603,743 ----
+    sc_save_option,
+    NULL,  /* gtk_options */
+  };
++ 
++ //=================================================================================
++ #include <linux/spi/spidev.h>
++ 
++ int spi_fd = -1;
++ const char* spi_device = "/dev/spidev0.0";
++ static Signal spi_sig_a = {"SPI", "a"};
++ static Signal spi_sig_b = {"SPI", "b"};
++ static int spi_nchans(void)
++ {
++   if (spi_fd < 0) 
++   {
++       if ((spi_fd = open(spi_device, O_RDWR, 0)) < 0) {
++                 printf("can't open device");
++         }
++   }
++ 	  
++ 
++   return (spi_fd >= 0) ? 2 : 0;
++ }
++ 
++ static int spi_get_fd(void)
++ {
++   return (spi_fd >= 0) ? spi_fd : 0;
++ }
++ 
++ static Signal *spi_chan(int chan)
++ {
++   return (chan == 0) ?&spi_sig_a : &spi_sig_b;
++ }
++ 
++ static void spi_reset_chan(int chan)
++ {
++   Signal * sig=spi_chan(chan);
++   sig->num = 0;
++   sig->frame ++;
++   sig->rate = 100000;
++ }
++ 
++ static void spi_reset(void)
++ {
++   int nbchan = spi_nchans();
++   int i=0;
++   for (i=0; i<nbchan; i++)
++  {
++ 	spi_reset_chan(i);
++  }	
++ }
++ 
++ static int spi_get_data_channel(int chan)
++ {
++ 	size_t len = 2;
++ 	char tx[] = { 0xD0 , 0x00 };
++ 	tx[0] |= (chan << 5);
++ 	char rx[len];
++ 
++         /*This is the transfer part, and sets up
++         the details needed to transfer the data*/
++         struct spi_ioc_transfer tr = {
++                 .tx_buf = (unsigned long)tx,
++                 .rx_buf = (unsigned long)rx,
++                 .len = len,
++                 .delay_usecs = 1000,
++                 .speed_hz = 10000,
++                 .bits_per_word = 8,
++                 .cs_change = 1,
++         };
++ 
++         //The Actuall Transfer command and data, does send and receive!! Very important!
++         int ret = ioctl(spi_fd, SPI_IOC_MESSAGE(1), &tr);
++         if (ret < 1) printf("ERROR: Can't send spi message");
++ 
++ 	// decode value
++ 	unsigned int value = ( (rx[0]<<7) | (rx[1]>>1) ) & 0x3FF;
++  #ifdef DEBUG	
++ 	printf("value = %d (%X %X)\n", value, rx[0], rx[1]);
++ #endif	
++ 	
++ 	// scale 10bits value to 8bits value [-127,128]
++ 	value= (value>>2) - 127;
++ 
++ 	Signal * sig=spi_chan(chan);
++         sig->data[sig->num] = value;
++         sig->delay = 0;
++ 	sig->num ++;
++ 	sig->num  = sig->num % sig->width;
++         sig->frame ++;
++ 
++ 	return 1;
++ }
++ 
++ static int spi_get_data()
++ {
++   int nbchan = spi_nchans();
++   int ret = 1;
++   int chan=0;
++   for (chan=0; chan<nbchan; chan++)
++  {
++ 	ret &= spi_get_data_channel(chan);
++  }
++  return ret;
++ }
++ 
++ static void spi_set_width(int width)
++ {
++   int nbchan = spi_nchans();
++   int chan=0;
++   for (chan=0; chan<nbchan; chan++)
++  {
++ 	Signal * sig=spi_chan(chan);
++ 	sig->width = width;
++ 
++ 	if (sig->data != NULL) free(sig->data);
++ 
++ 	sig->data = malloc(width * sizeof(short));
++  }		
++ }
++ 
++ DataSrc datasrc_spi = {
++   "SPI",
++   spi_nchans,
++   spi_chan,
++   NULL,
++   NULL,
++   NULL,
++   spi_set_width,
++   spi_reset,
++   spi_get_fd,
++   spi_get_data,
++   NULL,
++   NULL,  /* option1, */
++   NULL,  /* option1str, */
++   NULL,  /* option2, */
++   NULL,  /* option2str, */
++   NULL,
++   NULL,
++   NULL,  /* gtk_options */
++ };
