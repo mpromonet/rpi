@@ -7,10 +7,9 @@ import time
 def writeDac(device,chan,val):
     v1 = 0x30 | (chan<<7) | (val>>4);
     v2 = ((val & 0xF) << 4);
-    data = "%0.2X" % v1 + "%0.2X" % v2
 
     #transfers data string
-    b = device.transfer(data, len(data)/2)
+    b = device.xfer([v1,v2])
     
     return b;
 
