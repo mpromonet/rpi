@@ -9,7 +9,7 @@ def writeDac(device,chan,val):
     v2 = ((val & 0xF) << 4);
 
     #transfers data string
-    b = device.xfer([v1,v2])
+    b = device.xfer([v1,v2],1000)
     
     return b;
 
@@ -18,7 +18,7 @@ def main():
     device = spi.SPI(0,1)
 
     # send DAC value
-    for cnt in range(10):
+    for cnt in range(100):
         for chan in range(2):
             for i in range(255):
                 writeDac(device,chan,i);
