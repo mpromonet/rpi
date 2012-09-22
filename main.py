@@ -5,7 +5,7 @@ import spi
 import time
 
 import adm1602k_gpio
-import mpc3002_spi
+import mcp3002_spi
 
 def main():
     # Initialise display
@@ -16,12 +16,12 @@ def main():
 
     # read ADC and display on LCD
     for chan in range(50):
-        value = mpc3002_spi.readAdc(device, 0);
+        value = mcp3002_spi.readAdc(device, 0);
         output = "%.04d=" % value + "%f V" % (value * 3.3 / 1023);
         adm1602k_gpio.lcd_control(adm1602k_gpio.LCD_LINE_1)
         adm1602k_gpio.lcd_string(output)
 
-        value = mpc3002_spi.readAdc(device, 1);
+        value = mcp3002_spi.readAdc(device, 1);
         output = "%.04d=" % value + "%f V" % (value * 3.3 / 1023);
         adm1602k_gpio.lcd_control(adm1602k_gpio.LCD_LINE_2)
         adm1602k_gpio.lcd_string(output)
