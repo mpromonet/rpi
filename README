@@ -1,3 +1,6 @@
+apt-get install python-pip
+pip install RPi.GPIO
+
 Repository rpi
 - SPI Interface ADC MCP3002 (/dev/spidev0.0)
 - SPI Interface DAC MCP4802 (/dev/spidev0.1)
