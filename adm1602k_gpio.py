@@ -30,6 +30,7 @@
 #import
 import RPi.GPIO as GPIO
 import time
+import datetime
 
 # Define GPIO to LCD mapping
 LCD_RS = 22
@@ -55,21 +56,14 @@ def main():
   # Initialise display
   lcd_init()
 
-  # Send some test
-  lcd_byte(LCD_LINE_1, LCD_CMD)
-  lcd_string("Rasbperry Pi")
-  lcd_byte(LCD_LINE_2, LCD_CMD)
-  lcd_string("Model B")
-
-  time.sleep(3) # 3 second delay
-
   # Send some text
   lcd_byte(LCD_LINE_1, LCD_CMD)
-  lcd_string("Raspberrypi-spy")
-  lcd_byte(LCD_LINE_2, LCD_CMD)
-  lcd_string(".co.uk")
+  lcd_string("Raspberrypi")
+  for cnt in range(20):
+    lcd_byte(LCD_LINE_2, LCD_CMD)
+    lcd_string(datetime.datetime.now().strftime("%H:%M:%S.%f"))
+    time.sleep(0.1)
 
-  time.sleep(20)
 
 def setup_gpio():
   GPIO.setmode(GPIO.BCM)       # Use BCM GPIO numbers
