@@ -1,17 +1,12 @@
 #!/usr/bin/python
 #
-# HD44780 LCD Test Script for
-# Raspberry Pi
+# ST7066 LCD Test Script using sysfs
 #
-# Author : Matt Hawkins
-# Site   : http://www.raspberrypi-spy.co.uk
-# 
-# Date   : 26/07/2012
 #
 
 # The wiring for the LCD is as follows:
 # 1 : GND
-# 2 : 5V
+# 2 : 3.3V
 # 3 : Contrast (0-5V)*
 # 4 : RS (Register Select)
 # 5 : R/W (Read Write)       - GROUND THIS PIN
@@ -28,7 +23,6 @@
 # 16: LCD Backlight GND
 
 #import
-import RPi.GPIO as GPIO
 import time
 import datetime
 
@@ -57,44 +51,63 @@ def main():
   lcd_init()
 
   # Send some text
-  lcd_byte(LCD_LINE_1, LCD_CMD)
-  lcd_string("Raspberrypi")
+  lcd_string(LCD_LINE_1,"Raspberrypi")
   for cnt in range(20):
-    lcd_byte(LCD_LINE_2, LCD_CMD)
-    lcd_string(datetime.datetime.now().strftime("%H:%M:%S.%f"))
+    lcd_string(LCD_LINE_2,datetime.datetime.now().strftime("%H:%M:%S.%f"))
     time.sleep(0.1)
 
 
-def setup_gpio():
-  GPIO.setmode(GPIO.BCM)       # Use BCM GPIO numbers
-  GPIO.setup(LCD_E, GPIO.OUT)  # E
-  GPIO.setup(LCD_RS, GPIO.OUT) # RS
-  GPIO.setup(LCD_D4, GPIO.OUT) # DB4
-  GPIO.setup(LCD_D5, GPIO.OUT) # DB5
-  GPIO.setup(LCD_D6, GPIO.OUT) # DB6
-  GPIO.setup(LCD_D7, GPIO.OUT) # DB7
+def gpio_init(pin,mode):
+  fd = open("/sys/class/gpio/export","w")
+  try:
+    fd.write(str(pin))
+    fd.close()
+  except:
+    pass
+  fd = open("/sys/class/gpio/gpio"+str(pin)+"/direction","w")
+  fd.write(mode)
+  fd.close()
+
+def gpio_write(pin,value):
+  fd = open("/sys/class/gpio/gpio"+str(pin)+"/value","w")
+  val="0"
+  if value == True:
+    val="1"
+  fd.write(val)
+  fd.close()
 
 def lcd_init():
-  setup_gpio()
+  # Initialise GPIO
+  gpio_init(LCD_E, "out")  # E
+  gpio_init(LCD_RS, "out") # RS
+  gpio_init(LCD_D4, "out") # DB4
+  gpio_init(LCD_D5, "out") # DB5
+  gpio_init(LCD_D6, "out") # DB6
+  gpio_init(LCD_D7, "out") # DB7
+
   
-  # Initialise display
+  # Initialise display using 4bits bus mode
   lcd_byte(0x33,LCD_CMD)
   lcd_byte(0x32,LCD_CMD)
-  lcd_byte(0x28,LCD_CMD)
+  # function set
+  lcd_byte(0x28,LCD_CMD)  
+  # display on/off
   lcd_byte(0x0C,LCD_CMD)  
-  lcd_byte(0x06,LCD_CMD)
+  # clear
   lcd_clear()  
+  # left to right
+  lcd_byte(0x06,LCD_CMD)
 
-def lcd_string(message):
+def lcd_string(line,message):
+  # select line
+  lcd_byte(line,LCD_CMD)
+  
   # Send string to display
-
   message = message.ljust(LCD_WIDTH," ")  
 
   for i in range(LCD_WIDTH):
     lcd_byte(ord(message[i]),LCD_CHR)
 
-def lcd_control(cmd):
-   lcd_byte(cmd,LCD_CMD)
 
 def lcd_clear():
   lcd_byte(0x01,LCD_CMD)  
@@ -105,48 +118,35 @@ def lcd_byte(bits, mode):
   # mode = True  for character
   #        False for command
 
-  GPIO.output(LCD_RS, mode) # RS
+  gpio_write(LCD_RS, mode) # RS
 
   # High bits
-  GPIO.output(LCD_D4, False)
-  GPIO.output(LCD_D5, False)
-  GPIO.output(LCD_D6, False)
-  GPIO.output(LCD_D7, False)
-  if bits&0x10==0x10:
-    GPIO.output(LCD_D4, True)
-  if bits&0x20==0x20:
-    GPIO.output(LCD_D5, True)
-  if bits&0x40==0x40:
-    GPIO.output(LCD_D6, True)
-  if bits&0x80==0x80:
-    GPIO.output(LCD_D7, True)
-
-  # Toggle 'Enable' pin
-  time.sleep(E_DELAY)    
-  GPIO.output(LCD_E, True)  
-  time.sleep(E_PULSE)
-  GPIO.output(LCD_E, False)  
-  time.sleep(E_DELAY)      
-
+  lcd_4bits(bits>>4)  
   # Low bits
-  GPIO.output(LCD_D4, False)
-  GPIO.output(LCD_D5, False)
-  GPIO.output(LCD_D6, False)
-  GPIO.output(LCD_D7, False)
+  lcd_4bits(bits&0xf)
+
+def lcd_4bits(bits):
+  bits=bits&0xf
+  
+  # set gpio values
+  gpio_write(LCD_D4, False)
+  gpio_write(LCD_D5, False)
+  gpio_write(LCD_D6, False)
+  gpio_write(LCD_D7, False)
   if bits&0x01==0x01:
-    GPIO.output(LCD_D4, True)
+    gpio_write(LCD_D4, True)
   if bits&0x02==0x02:
-    GPIO.output(LCD_D5, True)
+    gpio_write(LCD_D5, True)
   if bits&0x04==0x04:
-    GPIO.output(LCD_D6, True)
+    gpio_write(LCD_D6, True)
   if bits&0x08==0x08:
-    GPIO.output(LCD_D7, True)
+    gpio_write(LCD_D7, True)
 
   # Toggle 'Enable' pin
   time.sleep(E_DELAY)    
-  GPIO.output(LCD_E, True)  
+  gpio_write(LCD_E, True)  
   time.sleep(E_PULSE)
-  GPIO.output(LCD_E, False)  
+  gpio_write(LCD_E, False)  
   time.sleep(E_DELAY)   
 
 if __name__ == '__main__':

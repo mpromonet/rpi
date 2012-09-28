@@ -18,13 +18,11 @@ def main():
     for chan in range(50):
         value = mcp3002_spi.readAdc(device, 0);
         output = "%.04d=" % value + "%f V" % (value * 3.3 / 1023);
-        adm1602k_gpio.lcd_control(adm1602k_gpio.LCD_LINE_1)
-        adm1602k_gpio.lcd_string(output)
+        adm1602k_gpio.lcd_string(adm1602k_gpio.LCD_LINE_1,output)
 
         value = mcp3002_spi.readAdc(device, 1);
         output = "%.04d=" % value + "%f V" % (value * 3.3 / 1023);
-        adm1602k_gpio.lcd_control(adm1602k_gpio.LCD_LINE_2)
-        adm1602k_gpio.lcd_string(output)
+        adm1602k_gpio.lcd_string(adm1602k_gpio.LCD_LINE_2,output)
 
         time.sleep(1)
       
