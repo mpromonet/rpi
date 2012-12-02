@@ -1,5 +1,5 @@
 obj-m := hello.o gpio-mcp23008.o i2c.o spisound.o
-KDIR := /usr/src/linux
+KDIR := /lib/modules/$(shell uname -r)/build
 PWD := $(shell pwd)
 all:
 	$(MAKE) -C $(KDIR) M=$(PWD) modules
