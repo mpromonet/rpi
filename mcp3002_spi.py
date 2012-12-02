@@ -11,13 +11,11 @@ def readAdc(device,chan):
 
     #transfers data string
     transfer, buf, _ = spi_transfer(bytes.fromhex(data), readlen=2)
-    print(transfer)
     b=device.do_transfers(transfer)
     
     # decode value
-    answer=list(buf)
-    print(int.from_bytes(answer, byteorder='big'))
-    value= ( (answer[0]*128) | (answer[1]/2) )
+    answer=list(transfer)
+    value= ( (answer[0]*128) | (answer[1]>>1) )
     value= value & 0x3ff
     
     return value;
@@ -32,7 +30,7 @@ def main():
         print("channel:%d" % chan + " value:%d" % value + " voltage:%f V" % (value * 3.3 / 1023) )
         
      #close SPI device
-    device.close()
+    device._file.close()
 
 if __name__ == '__main__':
     main()
