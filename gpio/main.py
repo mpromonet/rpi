@@ -1,7 +1,6 @@
 #!/usr/bin/python
 
-#import
-import spi
+from spi import spi_transfer, SPIDev
 import time
 
 import adm1602k_gpio
@@ -12,7 +11,7 @@ def main():
     adm1602k_gpio.lcd_init()
 
     #open the SPI device /dev/spidevX.Y
-    device = spi.SPI(0,0)
+    device = SPIDev('/dev/spidev0.0')
 
     # read ADC and display on LCD
     for chan in range(50):
@@ -27,7 +26,7 @@ def main():
         time.sleep(1)
       
     #close SPI device
-    device.close();
+    device._file.close();
     
     adm1602k_gpio.lcd_clear();
 

@@ -27,12 +27,12 @@ import time
 import datetime
 
 # Define GPIO to LCD mapping
-LCD_RS = 22
-LCD_E  = 17
-LCD_D4 = 25 
-LCD_D5 = 24
-LCD_D6 = 23
-LCD_D7 = 18
+LCD_RS = 132
+LCD_E  = 134
+LCD_D4 = 128 
+LCD_D5 = 129
+LCD_D6 = 130
+LCD_D7 = 131
 
 # Define some device constants
 LCD_WIDTH = 16    # Maximum characters per line
@@ -64,9 +64,12 @@ def gpio_init(pin,mode):
     fd.close()
   except:
     pass
-  fd = open("/sys/class/gpio/gpio"+str(pin)+"/direction","w")
-  fd.write(mode)
-  fd.close()
+  try:
+    fd = open("/sys/class/gpio/gpio"+str(pin)+"/direction","w")
+    fd.write(mode)
+    fd.close()
+  except:
+    pass
 
 def gpio_write(pin,value):
   fd = open("/sys/class/gpio/gpio"+str(pin)+"/value","w")

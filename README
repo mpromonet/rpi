@@ -1,5 +1,6 @@
 apt-get install python-pip
 pip install RPi.GPIO
+pip install SPIlib
 
 Repository rpi
 - SPI Interface ADC MCP3002 (/dev/spidev0.0)
