@@ -16,14 +16,18 @@ int main(int argc, char **argv)
     do
     {
         err = OMX_ComponentNameEnum(name, OMX_MAX_STRINGNAME_SIZE, index);
-        if (err == OMX_ErrorNone || err == OMX_ErrorNoMore)
+        if (err == OMX_ErrorNone)
         {
-            printf("#%d [%s] err = %x\n", index, name, err);
-            index++;
+		OMX_U32 numRoles = 0;
+		err = OMX_GetRolesOfComponent(name,&numRoles,NULL);
+		if (err != OMX_ErrorNone)
+		{
+			printf("Error er:%x\n", err);
+		}
+		printf("#%d [%s] numRoles = %x\n", index, name, numRoles);
+		index++;
         }
     } while (err == OMX_ErrorNone);
-
-    printf("%d components err = %x\n", index, err);
    
     OMX_Deinit();
 
