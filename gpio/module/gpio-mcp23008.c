@@ -1,7 +1,11 @@
 /*
  * MCP23008 I2C/GPIO gpio expander driver
  */
-#define DEBUG
+#ifndef CONFIG_I2C
+#error CONFIG_I2C not defined
+#endif
+
+#define DEBUG 1
 
 #include <linux/kernel.h>
 #include <linux/device.h>
