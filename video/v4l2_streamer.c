@@ -131,7 +131,7 @@ class V4L2DeviceSource: public FramedSource
 			if (!isCurrentlyAwaitingData()) return;
 			
 			char buffer[m_bufferSize];
-			int newFrameSize = read(m_fd, &buffer,  m_bufferSize);
+			int newFrameSize = v4l2_read(m_fd, &buffer,  m_bufferSize);
 			
 			if (newFrameSize < 0)
 			{
