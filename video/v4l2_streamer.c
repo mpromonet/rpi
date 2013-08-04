@@ -131,23 +131,29 @@ class V4L2DeviceSource: public FramedSource
 			if (!isCurrentlyAwaitingData()) return;
 			
 			char buffer[m_bufferSize];
-			int newFrameSize = read( m_fd, &buffer,  m_bufferSize);
-
-			envir() << "V4L2DeviceSource::incomingPacketHandler fd:"  << m_fd << " buffersize:" << m_bufferSize << " got size:"  << newFrameSize << "/" << fMaxSize<< "\n";		
+			int newFrameSize = read(m_fd, &buffer,  m_bufferSize);
 			
-			if (newFrameSize > fMaxSize) 
+			if (newFrameSize < 0)
 			{
-				fFrameSize = fMaxSize;
-				fNumTruncatedBytes = newFrameSize - fMaxSize;
-			} 
-			else 
-			{
-				fFrameSize = newFrameSize;
+				envir() << "V4L2DeviceSource::incomingPacketHandler fd:"  << m_fd << " mask:" << mask << " errno:" << errno << " "  << strerror(errno) << "\n";		
 			}
-			gettimeofday(&fPresentationTime, NULL);
-			memcpy(fTo, &buffer, fFrameSize);
+			else
+			{
+				envir() << "V4L2DeviceSource::incomingPacketHandler fd:"  << m_fd << " buffersize:" << m_bufferSize << " got size:"  << newFrameSize << "/" << fMaxSize<< "\n";		
+				if (newFrameSize > fMaxSize) 
+				{
+					fFrameSize = fMaxSize;
+					fNumTruncatedBytes = newFrameSize - fMaxSize;
+				} 
+				else 
+				{
+					fFrameSize = newFrameSize;
+				}
+				gettimeofday(&fPresentationTime, NULL);
+				memcpy(fTo, &buffer, fFrameSize);
 	  
-			afterGetting(this); 
+				afterGetting(this); 
+			}
 		}	
 
 	private:
