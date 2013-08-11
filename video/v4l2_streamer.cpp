@@ -11,12 +11,13 @@
 #include <sys/mman.h>
 #include <linux/videodev2.h>
 #include <sys/timeb.h>
-
-#include <libv4l2.h>
-
 #include <string>
 #include <signal.h>
 
+// libv4l2
+#include <libv4l2.h>
+
+// live555
 #include <liveMedia.hh>
 #include <BasicUsageEnvironment.hh>
 #include <GroupsockHelper.hh>
@@ -37,10 +38,29 @@ class V4L2DeviceSource: public FramedSource
 		};
 
 	public:
-		static V4L2DeviceSource* createNew(UsageEnvironment& env, V4L2DeviceParameters params) { return new V4L2DeviceSource(env, params); }
+		static V4L2DeviceSource* createNew(UsageEnvironment& env, V4L2DeviceParameters params) 
+		{ 
+			V4L2DeviceSource* device = new V4L2DeviceSource(env, params); 
+			if (device && !device->init())
+			{
+				delete device;
+				device=NULL;
+			}
+			return device;
+		}
+		int getBufferSize() { return m_bufferSize; };
 
 	protected:
 		V4L2DeviceSource(UsageEnvironment& env, V4L2DeviceParameters params) : FramedSource(env), m_params(params), m_fd(-1), m_bufferSize(0)
+		{
+		}
+		
+		virtual ~V4L2DeviceSource()
+		{
+			v4l2_close(m_fd);
+		}
+
+		bool init()
 		{
 			m_fd = initdevice(m_params.m_devName.c_str());
 			if (m_fd == -1)
@@ -51,14 +71,10 @@ class V4L2DeviceSource: public FramedSource
 			{
 				envir().taskScheduler().turnOnBackgroundReadHandling( m_fd, V4L2DeviceSource::incomingPacketHandlerStub,this);		
 			}
+			return (m_fd!=-1);
 		}
 		
-		virtual ~V4L2DeviceSource()
-		{
-			v4l2_close(m_fd);
-		}
 
-	private:
 		static int xioctl(int fd, int request, void *arg)
 		{
 			int r = -1;
@@ -81,7 +97,6 @@ class V4L2DeviceSource: public FramedSource
 				perror("Cannot open device");
 				return -1;
 			}
-
 			
 			// ===== CAPAPILITIES
 			struct v4l2_capability cap;
@@ -215,7 +230,7 @@ class MJPEGVideoSource : public JPEGVideoSource
 		{			
 			int headerSize = 0;
 			bool headerOk = false;
-
+			
 			for (unsigned int i = 0; i < frameSize ; ++i) 
 			{
 				// SOF 
@@ -312,7 +327,6 @@ void sighandler(int n)
 
 RTPSink* createSink(UsageEnvironment* env, Groupsock * gs, int format)
 {
-	OutPacketBuffer::maxSize = 3000000;
 	RTPSink* videoSink = NULL;
 	switch (format)
 	{
@@ -351,64 +365,68 @@ int main(int argc, char** argv)
 	}
 	else
 	{		
-		// Create RTP and RTCP groupsock:
-		struct in_addr destinationAddress;
-		destinationAddress.s_addr = chooseRandomIPv4SSMAddress(*env);
-
-		const unsigned short rtpPortNum = 18888;
-		const unsigned short rtcpPortNum = rtpPortNum+1;
-		const unsigned char ttl = 255;
-
-		const Port rtpPort(rtpPortNum);
-		const Port rtcpPort(rtcpPortNum);
-
-		Groupsock rtpGroupsock(*env, destinationAddress, rtpPort, ttl);
-		Groupsock rtcpGroupsock(*env, destinationAddress, rtcpPort, ttl);
-
-		// Create a 'Video RTP' sink from the RTP 'groupsock':
-		OutPacketBuffer::maxSize = 3000000;
-		RTPSink* videoSink = createSink(env,&rtpGroupsock, format);
-
-		// Create 'RTCP instance' for this RTP sink:
-		const unsigned estimatedSessionBandwidth = 500; // in kbps; for RTCP b/w share
-		const unsigned maxCNAMElen = 100;
-		unsigned char CNAME[maxCNAMElen+1];
-		gethostname((char*)CNAME, maxCNAMElen);
-		CNAME[maxCNAMElen] = '\0'; 
-		RTCPInstance* rtcp = RTCPInstance::createNew(*env, &rtcpGroupsock,  estimatedSessionBandwidth, CNAME, videoSink, NULL);
-		
-		// Create Server Session
-		ServerMediaSession* sms = ServerMediaSession::createNew(*env);
-		sms->addSubsession(PassiveServerMediaSubsession::createNew(*videoSink, rtcp));
-		rtspServer->addServerMediaSession(sms);
-
-		char* url = rtspServer->rtspURL(sms);
-		*env << "Play this stream using the URL \"" << url << "\"\n";
-		delete[] url;
-
 		// Start the streaming:		
 		*env << "Create V4L2 Source..." << dev_name << "\n";
 		V4L2DeviceSource::V4L2DeviceParameters param(dev_name,format);
 		V4L2DeviceSource* videoES = V4L2DeviceSource::createNew(*env, param);
 		if (videoES == NULL) 
 		{
-			*env << "Unable to create source";
-			exit(1);
+			*env << "Unable to create source \n";
+		}
+		else
+		{
+			// Create a framer for the Video Elementary Stream:
+			*env << "Create Source...\n";
+			FramedSource* videoSource = createSource(env, videoES, format);
+
+
+			// Create Sink
+			struct in_addr destinationAddress;
+			destinationAddress.s_addr = chooseRandomIPv4SSMAddress(*env);
+
+			const unsigned short rtpPortNum = 18888;
+			const unsigned short rtcpPortNum = rtpPortNum+1;
+			const unsigned char ttl = 255;
+
+			const Port rtpPort(rtpPortNum);
+			const Port rtcpPort(rtcpPortNum);
+
+			Groupsock rtpGroupsock(*env, destinationAddress, rtpPort, ttl);
+			Groupsock rtcpGroupsock(*env, destinationAddress, rtcpPort, ttl);
+
+			// Create a 'Video RTP' sink from the RTP 'groupsock':
+			OutPacketBuffer::maxSize = videoES->getBufferSize();
+			RTPSink* videoSink = createSink(env,&rtpGroupsock, format);
+
+			// Create 'RTCP instance' for this RTP sink:
+			const unsigned estimatedSessionBandwidth = 500; // in kbps; for RTCP b/w share
+			const unsigned maxCNAMElen = 100;
+			unsigned char CNAME[maxCNAMElen+1];
+			gethostname((char*)CNAME, maxCNAMElen);
+			CNAME[maxCNAMElen] = '\0'; 
+			RTCPInstance* rtcp = RTCPInstance::createNew(*env, &rtcpGroupsock,  estimatedSessionBandwidth, CNAME, videoSink, NULL);
+			
+			// Create Server Session
+			ServerMediaSession* sms = ServerMediaSession::createNew(*env);
+			sms->addSubsession(PassiveServerMediaSubsession::createNew(*videoSink, rtcp));
+			rtspServer->addServerMediaSession(sms);
+
+			char* url = rtspServer->rtspURL(sms);
+			*env << "Play this stream using the URL \"" << url << "\"\n";
+			delete[] url;
+
+			
+			// Finally, start playing:
+			*env << "Starting...\n";
+			videoSink->startPlaying(*videoSource, NULL, videoSink);
+
+			signal(SIGINT,sighandler);
+			env->taskScheduler().doEventLoop(&quit); 
+			*env << "Exiting..\n";
+			
+			Medium::close(videoSink);
 		}
 
-		// Create a framer for the Video Elementary Stream:
-		*env << "Create Source...\n";
-		FramedSource* videoSource = createSource(env, videoES, format);
-
-		// Finally, start playing:
-		*env << "Starting...\n";
-		videoSink->startPlaying(*videoSource, NULL, videoSink);
-
-		signal(SIGINT,sighandler);
-		env->taskScheduler().doEventLoop(&quit); 
-		*env << "Exiting..\n";
-
-		Medium::close(videoSink);
 		Medium::close(rtspServer);
 	}
 	
