@@ -27,12 +27,12 @@ class V4L2DeviceSource: public FramedSource
 		class V4L2DeviceParameters 
 		{
 			public:
-				V4L2DeviceParameters(const char* devname) : m_devName(devname) {};
+				V4L2DeviceParameters(const char* devname, int format) : m_devName(devname), m_format(format) {};
 					
 				std::string m_devName;
 				static const int m_width = 320;
 				static const int m_height = 240;
-				static const int m_format = V4L2_PIX_FMT_MJPEG;
+				int m_format;
 				
 		};
 
@@ -130,7 +130,7 @@ class V4L2DeviceSource: public FramedSource
 				printf("Warning: driver is sending image at %dx%d\n", fmt.fmt.pix.width, fmt.fmt.pix.width);
 			}
 
-			m_bufferSize =  (fmt.fmt.pix.width * fmt.fmt.pix.width);
+			m_bufferSize =  fmt.fmt.pix.sizeimage;
 			
 			return fd;
 		}
@@ -310,12 +310,40 @@ void sighandler(int n)
 	quit =1;
 }
 
+RTPSink* createSink(UsageEnvironment* env, Groupsock * gs, int format)
+{
+	OutPacketBuffer::maxSize = 3000000;
+	RTPSink* videoSink = NULL;
+	switch (format)
+	{
+		case V4L2_PIX_FMT_MJPEG : videoSink = JPEGVideoRTPSink::createNew(*env, gs); break;
+		case V4L2_PIX_FMT_H264 : videoSink = H264VideoRTPSink::createNew(*env, gs,96); break;
+	}
+	return videoSink;
+}
+
+FramedSource* createSource(UsageEnvironment* env, FramedSource * videoES, int format)
+{
+	FramedSource* source = NULL;
+	switch (format)
+	{
+		case V4L2_PIX_FMT_MJPEG : source = MJPEGVideoSource::createNew(*env, videoES); break;
+		case V4L2_PIX_FMT_H264 : source = H264VideoStreamFramer::createNew(*env, videoES); break;
+	}
+	return source;
+}
+
 int main(int argc, char** argv) 
 {
+	char *dev_name = "/dev/video0";	
+	int format = V4L2_PIX_FMT_MJPEG;
+	if (argc>=2) dev_name=argv[1];
+	if (argc>=3) format=V4L2_PIX_FMT_H264;
+
 	// Begin by setting up our usage environment:
 	TaskScheduler* scheduler = BasicTaskScheduler::createNew();
-	UsageEnvironment* env = BasicUsageEnvironment::createNew(*scheduler);
-
+	UsageEnvironment* env = BasicUsageEnvironment::createNew(*scheduler);	
+	
 	RTSPServer* rtspServer = RTSPServer::createNew(*env, 8554);
 	if (rtspServer == NULL) 
 	{
@@ -339,7 +367,7 @@ int main(int argc, char** argv)
 
 		// Create a 'Video RTP' sink from the RTP 'groupsock':
 		OutPacketBuffer::maxSize = 3000000;
-		RTPSink* videoSink = JPEGVideoRTPSink::createNew(*env, &rtpGroupsock);
+		RTPSink* videoSink = createSink(env,&rtpGroupsock, format);
 
 		// Create 'RTCP instance' for this RTP sink:
 		const unsigned estimatedSessionBandwidth = 500; // in kbps; for RTCP b/w share
@@ -358,11 +386,9 @@ int main(int argc, char** argv)
 		*env << "Play this stream using the URL \"" << url << "\"\n";
 		delete[] url;
 
-		// Start the streaming:
-		char                            *dev_name = "/dev/video0";	
-		if (argc ==2) dev_name=argv[1];
+		// Start the streaming:		
 		*env << "Create V4L2 Source..." << dev_name << "\n";
-		V4L2DeviceSource::V4L2DeviceParameters param(dev_name);
+		V4L2DeviceSource::V4L2DeviceParameters param(dev_name,format);
 		V4L2DeviceSource* videoES = V4L2DeviceSource::createNew(*env, param);
 		if (videoES == NULL) 
 		{
@@ -371,8 +397,8 @@ int main(int argc, char** argv)
 		}
 
 		// Create a framer for the Video Elementary Stream:
-		*env << "Create MJPEG Source...\n";
-		MJPEGVideoSource* videoSource = MJPEGVideoSource::createNew(*env, videoES);
+		*env << "Create Source...\n";
+		FramedSource* videoSource = createSource(env, videoES, format);
 
 		// Finally, start playing:
 		*env << "Starting...\n";
