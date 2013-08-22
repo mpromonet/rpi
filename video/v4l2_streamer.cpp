@@ -11,8 +11,9 @@
 #include <sys/mman.h>
 #include <linux/videodev2.h>
 #include <sys/timeb.h>
-#include <string>
 #include <signal.h>
+#include <string>
+#include <iostream>
 
 // libv4l2
 #include <libv4l2.h>
@@ -28,11 +29,12 @@ class V4L2DeviceSource: public FramedSource
 		class V4L2DeviceParameters 
 		{
 			public:
-				V4L2DeviceParameters(const char* devname, int format) : m_devName(devname), m_format(format) {};
+				V4L2DeviceParameters(const char* devname, int format, int width, int height) : 
+					m_devName(devname), m_format(format), m_width(width), m_height(height) {};
 					
 				std::string m_devName;
-				static const int m_width = 320;
-				static const int m_height = 240;
+				int m_width;
+				int m_height;
 				int m_format;
 				
 		};
@@ -173,12 +175,15 @@ class V4L2DeviceSource: public FramedSource
 			if (newFrameSize < 0)
 			{
 				envir() << "V4L2DeviceSource::incomingPacketHandler fd:"  << m_fd << " mask:" << mask << " errno:" << errno << " "  << strerror(errno) << "\n";		
+				handleClosure(this);
 			}
 			else
 			{
 				struct timeb current;
 				ftime(&current); 
+#if DEBUG
 				envir() << "V4L2DeviceSource::incomingPacketHandler read time:"  << int((current.time-ref.time)*1000 + current.millitm-ref.millitm) << " ms \n";		
+#endif
 				
 				gettimeofday(&fPresentationTime, NULL);
 				fDurationInMicroseconds = 0;
@@ -351,8 +356,31 @@ int main(int argc, char** argv)
 {
 	char *dev_name = "/dev/video0";	
 	int format = V4L2_PIX_FMT_MJPEG;
+	int width = 640;
+	int height = 480;
+
+	if ((argc>=2) && (strcmp(argv[1],"-h")==0))
+	{
+		std::cout << argv[0] << " [device] [M|H] [width] [height]" << std::endl;
+		exit(0);
+	}
 	if (argc>=2) dev_name=argv[1];
-	if (argc>=3) format=V4L2_PIX_FMT_H264;
+	if (argc>=3) 
+	{
+		switch (argv[2][0])
+		{
+			case 'M': format = V4L2_PIX_FMT_MJPEG; break;
+			case 'H': format = V4L2_PIX_FMT_H264; break;
+		}
+	}
+	if (argc>=4) 
+	{
+		width = atoi(argv[3]);
+	}
+	if (argc>=5) 
+	{
+		height = atoi(argv[4]);
+	}
 
 	// Begin by setting up our usage environment:
 	TaskScheduler* scheduler = BasicTaskScheduler::createNew();
@@ -367,7 +395,7 @@ int main(int argc, char** argv)
 	{		
 		// Start the streaming:		
 		*env << "Create V4L2 Source..." << dev_name << "\n";
-		V4L2DeviceSource::V4L2DeviceParameters param(dev_name,format);
+		V4L2DeviceSource::V4L2DeviceParameters param(dev_name,format,width,height);
 		V4L2DeviceSource* videoES = V4L2DeviceSource::createNew(*env, param);
 		if (videoES == NULL) 
 		{
