@@ -14,6 +14,7 @@
 #include <signal.h>
 #include <string>
 #include <iostream>
+#include <list>
 
 // libv4l2
 #include <libv4l2.h>
@@ -23,22 +24,35 @@
 #include <BasicUsageEnvironment.hh>
 #include <GroupsockHelper.hh>
 
+#define DEBUG 0
+
 class V4L2DeviceSource: public FramedSource 
 {
 	public:
+		// V4L2 Capture parameters
 		class V4L2DeviceParameters 
 		{
 			public:
-				V4L2DeviceParameters(const char* devname, int format, int width, int height) : 
-					m_devName(devname), m_format(format), m_width(width), m_height(height) {};
+				V4L2DeviceParameters(const char* devname, int format, int queueSize, int width, int height) : 
+					m_devName(devname), m_format(format), m_queueSize(queueSize), m_width(width), m_height(height) {};
 					
 				std::string m_devName;
 				int m_width;
 				int m_height;
 				int m_format;
+				int m_queueSize;
 				
 		};
 
+		// Captured frame
+		struct Frame
+		{
+			Frame(char* buffer, int size) : m_buffer(buffer), m_size(size) {};
+			~Frame()  { delete m_buffer; };
+			char* m_buffer;
+			int m_size;
+		};
+		
 	public:
 		static V4L2DeviceSource* createNew(UsageEnvironment& env, V4L2DeviceParameters params) 
 		{ 
@@ -50,7 +64,7 @@ class V4L2DeviceSource: public FramedSource
 			}
 			return device;
 		}
-		int getBufferSize() { return m_bufferSize; };
+		int getBufferSize() { return 2*m_bufferSize; };
 
 	protected:
 		V4L2DeviceSource(UsageEnvironment& env, V4L2DeviceParameters params) : FramedSource(env), m_params(params), m_fd(-1), m_bufferSize(0)
@@ -154,6 +168,44 @@ class V4L2DeviceSource: public FramedSource
 		
 		virtual void doGetNextFrame()
 		{
+			static int send_fps = 0;
+			static int send_fps_sec = 0;
+			gettimeofday(&fPresentationTime, NULL);
+			
+			fDurationInMicroseconds = 0;
+			fFrameSize = 0;
+			
+			if (m_captureQueue.empty())
+			{
+#if DEBUG				
+				envir() << "Queue is empty \n";		
+#endif				
+			}
+			else
+			{
+				send_fps++;
+				if (fPresentationTime.tv_sec != send_fps_sec)
+				{
+					envir() << "V4L2DeviceSource::doGetNextFrame queuesize:"  << m_captureQueue.size() << "fps:" << send_fps <<"\n";		
+					send_fps_sec = fPresentationTime.tv_sec;
+					send_fps = 0;
+				}
+				Frame * frame = m_captureQueue.back();
+				m_captureQueue.pop_back();
+												
+				if (frame->m_size > fMaxSize) 
+				{
+					fFrameSize = fMaxSize;
+					fNumTruncatedBytes = frame->m_size - fMaxSize;
+				} 
+				else 
+				{
+					fFrameSize = frame->m_size;
+				}
+				memcpy(fTo, frame->m_buffer, fFrameSize);
+				delete frame;
+			}
+			nextTask() = envir().taskScheduler().scheduleDelayedTask(0,(TaskFunc*)FramedSource::afterGetting, this);
 		}
 		
 		static void incomingPacketHandlerStub(void* clientData, int mask)
@@ -164,17 +216,16 @@ class V4L2DeviceSource: public FramedSource
 		
 		void incomingPacketHandler(int mask) 
 		{
-			if (!isCurrentlyAwaitingData()) return;
-			
-			char buffer[m_bufferSize];
+			char* buffer = new char[m_bufferSize];
 			
 			struct timeb ref;
 			ftime(&ref); 
-			int newFrameSize = v4l2_read(m_fd, &buffer,  m_bufferSize);
+			int frameSize = v4l2_read(m_fd, buffer,  m_bufferSize);
 			
-			if (newFrameSize < 0)
+			if (frameSize < 0)
 			{
 				envir() << "V4L2DeviceSource::incomingPacketHandler fd:"  << m_fd << " mask:" << mask << " errno:" << errno << " "  << strerror(errno) << "\n";		
+				delete buffer;
 				handleClosure(this);
 			}
 			else
@@ -182,24 +233,21 @@ class V4L2DeviceSource: public FramedSource
 				struct timeb current;
 				ftime(&current); 
 #if DEBUG
-				envir() << "V4L2DeviceSource::incomingPacketHandler read time:"  << int((current.time-ref.time)*1000 + current.millitm-ref.millitm) << " ms \n";		
+				envir() << "V4L2DeviceSource::incomingPacketHandler read time:"  << int((current.time-ref.time)*1000 + current.millitm-ref.millitm) << " ms size:" << frameSize << "\n";		
+				printf ("%02X%02X%02X%02X%02X%02X\n", buffer[0], buffer[1], buffer[2], buffer[3], buffer[4], buffer[5]);
 #endif
-				
-				gettimeofday(&fPresentationTime, NULL);
-				fDurationInMicroseconds = 0;
-												
-				if (newFrameSize > fMaxSize) 
+				if (m_captureQueue.size() >= m_params.m_queueSize)
 				{
-					fFrameSize = fMaxSize;
-					fNumTruncatedBytes = newFrameSize - fMaxSize;
-				} 
-				else 
-				{
-					fFrameSize = newFrameSize;
+					while (m_captureQueue.size() >= m_params.m_queueSize)
+					{
+#if DEBUG						
+						envir() << "Queue full size drop frame size:"  << m_captureQueue.size() << " \n";		
+#endif						
+						delete m_captureQueue.back();
+						m_captureQueue.pop_back();
+					}
 				}
-				memcpy(fTo, &buffer, fFrameSize);
-	  
-				afterGetting(this); 
+				m_captureQueue.push_back(new Frame(buffer, frameSize));	  				
 			}
 		}	
 
@@ -207,120 +255,7 @@ class V4L2DeviceSource: public FramedSource
 		V4L2DeviceParameters m_params;
 		int m_fd;
 		int m_bufferSize;
-};
-
-class MJPEGVideoSource : public JPEGVideoSource
-{
- 	public:
-                static MJPEGVideoSource* createNew (UsageEnvironment& env, FramedSource* source)
-		{
-                 	return new MJPEGVideoSource(env,source);
-		}
-
-	public:
-                virtual void doGetNextFrame()
-		{
-			if (m_inputSource)
-			{
-				m_inputSource->getNextFrame(fTo, fMaxSize, afterGettingFrameSub, this, FramedSource::handleClosure, this);
-			}
-		}
-
-		static void afterGettingFrameSub(void* clientData, unsigned frameSize,unsigned numTruncatedBytes,struct timeval presentationTime,unsigned durationInMicroseconds) 
-		{
-                 		MJPEGVideoSource* source = (MJPEGVideoSource*)clientData;
-   				source->afterGettingFrame(frameSize, numTruncatedBytes, presentationTime, durationInMicroseconds);
-    		}
-                void afterGettingFrame(unsigned frameSize,unsigned numTruncatedBytes,struct timeval presentationTime,unsigned durationInMicroseconds)
-		{			
-			int headerSize = 0;
-			bool headerOk = false;
-			
-			for (unsigned int i = 0; i < frameSize ; ++i) 
-			{
-				// SOF 
-				if ( (i+8) < frameSize  && fTo[i] == 0xFF && fTo[i+1] == 0xC0 ) 
-				{
-					m_height = (fTo[i+5]<<5)|(fTo[i+6]>>3);
-					m_width = (fTo[i+7]<<5)|(fTo[i+8]>>3);
-				}
-				// DQT
-				if ( (i+5+64) < frameSize && fTo[i] == 0xFF && fTo[i+1] == 0xDB) 
-				{
-					if (fTo[i+4] ==0)
-					{
-						memcpy(m_qTable, fTo + i + 5, 64);
-						m_qTable0Init = true;
-					}
-					else if (fTo[i+4] ==1)
-					{
-						memcpy(m_qTable + 64, fTo + i + 5, 64);
-						m_qTable1Init = true;
-					}
-				}
-				// End of header
-				if ( (i+1) < frameSize && fTo[i] == 0x3F && fTo[i+1] == 0x00 ) 
-				{
-					headerOk = true;
-					headerSize = i+2;
-					break;
-				}
-			}
-
-			if (headerOk)
-			{
-				envir() << "MJPEGVideoSource::afterGettingFrame time:" << (presentationTime.tv_sec*1000000.0+presentationTime.tv_usec)/1000000.0 
-					<< " m_qTable0Init:" << m_qTable0Init << " m_qTable1Init:" << m_qTable1Init				
-					<< " size:" << (m_width*8) << "x" << (m_height*8) << "\n";
-				fFrameSize = frameSize - headerSize;
-				memmove( fTo, fTo + headerSize, fFrameSize );
-			}
-			else
-			{
-				fFrameSize = 0;
-			}
-
-			fNumTruncatedBytes = numTruncatedBytes;
-			fPresentationTime = presentationTime;
-			fDurationInMicroseconds = durationInMicroseconds;
-						
-			afterGetting(this);
-		}
-
-		virtual u_int8_t type() { return 1; };
-		virtual u_int8_t qFactor() { return 128; };
-		virtual u_int8_t width() { return m_width; };
-		virtual u_int8_t height() { return m_height; };
-		virtual u_int8_t const* quantizationTables( u_int8_t& precision, u_int16_t& length )
-		{
-			length = 0;
-			precision = 0;
-			if ( m_qTable0Init && m_qTable1Init )
-			{
-				precision = 8;
-				length = sizeof(m_qTable);
-			}
-			return m_qTable;
-		}
-
-	protected:
-                MJPEGVideoSource(UsageEnvironment& env, FramedSource* source) : JPEGVideoSource(env), m_inputSource(source), m_width(0), m_height(0), m_qTable0Init(false), m_qTable1Init(false) 
-		{
-			memset(&m_qTable,0,sizeof(m_qTable));
-		}
-
-		virtual ~MJPEGVideoSource()
-		{
-			Medium::close(m_inputSource);
-		}
-
-	protected:
-                FramedSource* m_inputSource;
-		u_int8_t      m_width;
-		u_int8_t      m_height;
-		u_int8_t      m_qTable[128];
-		bool          m_qTable0Init;
-		bool          m_qTable1Init;
+		std::list<Frame*> m_captureQueue;
 };
 
 char quit = 0;
@@ -335,7 +270,6 @@ RTPSink* createSink(UsageEnvironment* env, Groupsock * gs, int format)
 	RTPSink* videoSink = NULL;
 	switch (format)
 	{
-		case V4L2_PIX_FMT_MJPEG : videoSink = JPEGVideoRTPSink::createNew(*env, gs); break;
 		case V4L2_PIX_FMT_H264 : videoSink = H264VideoRTPSink::createNew(*env, gs,96); break;
 	}
 	return videoSink;
@@ -346,7 +280,6 @@ FramedSource* createSource(UsageEnvironment* env, FramedSource * videoES, int fo
 	FramedSource* source = NULL;
 	switch (format)
 	{
-		case V4L2_PIX_FMT_MJPEG : source = MJPEGVideoSource::createNew(*env, videoES); break;
 		case V4L2_PIX_FMT_H264 : source = H264VideoStreamFramer::createNew(*env, videoES); break;
 	}
 	return source;
@@ -355,34 +288,31 @@ FramedSource* createSource(UsageEnvironment* env, FramedSource * videoES, int fo
 int main(int argc, char** argv) 
 {
 	char *dev_name = "/dev/video0";	
-	int format = V4L2_PIX_FMT_MJPEG;
+	int format = V4L2_PIX_FMT_H264;
 	int width = 640;
 	int height = 480;
+	int queueSize = 100;
 
-	if ((argc>=2) && (strcmp(argv[1],"-h")==0))
+	int c = 0;     
+	while ((c = getopt (argc, argv, "hW:H:Q:")) != -1)
 	{
-		std::cout << argv[0] << " [device] [M|H] [width] [height]" << std::endl;
-		exit(0);
-	}
-	if (argc>=2) dev_name=argv[1];
-	if (argc>=3) 
-	{
-		switch (argv[2][0])
+		switch (c)
 		{
-			case 'M': format = V4L2_PIX_FMT_MJPEG; break;
-			case 'H': format = V4L2_PIX_FMT_H264; break;
+			case 'W':	width = atoi(optarg); break;
+			case 'H':	height = atoi(optarg); break;
+			case 'Q':	queueSize = atoi(optarg); break;
+			case 'h':
+			{
+				std::cout << argv[0] << " [-Q queueSize] [-W width] [-H height] [device]" << std::endl;
+				exit(0);
+			}
 		}
 	}
-	if (argc>=4) 
+	if (optind<argc)
 	{
-		width = atoi(argv[3]);
+		dev_name = argv[optind];
 	}
-	if (argc>=5) 
-	{
-		height = atoi(argv[4]);
-	}
-
-	// Begin by setting up our usage environment:
+     
 	TaskScheduler* scheduler = BasicTaskScheduler::createNew();
 	UsageEnvironment* env = BasicUsageEnvironment::createNew(*scheduler);	
 	
@@ -393,9 +323,9 @@ int main(int argc, char** argv)
 	}
 	else
 	{		
-		// Start the streaming:		
+		// Init capture
 		*env << "Create V4L2 Source..." << dev_name << "\n";
-		V4L2DeviceSource::V4L2DeviceParameters param(dev_name,format,width,height);
+		V4L2DeviceSource::V4L2DeviceParameters param(dev_name,format,queueSize,width,height);
 		V4L2DeviceSource* videoES = V4L2DeviceSource::createNew(*env, param);
 		if (videoES == NULL) 
 		{
@@ -403,10 +333,8 @@ int main(int argc, char** argv)
 		}
 		else
 		{
-			// Create a framer for the Video Elementary Stream:
-			*env << "Create Source...\n";
+			*env << "Create Framed Source...\n";
 			FramedSource* videoSource = createSource(env, videoES, format);
-
 
 			// Create Sink
 			struct in_addr destinationAddress;
@@ -427,12 +355,11 @@ int main(int argc, char** argv)
 			RTPSink* videoSink = createSink(env,&rtpGroupsock, format);
 
 			// Create 'RTCP instance' for this RTP sink:
-			const unsigned estimatedSessionBandwidth = 500; // in kbps; for RTCP b/w share
 			const unsigned maxCNAMElen = 100;
 			unsigned char CNAME[maxCNAMElen+1];
 			gethostname((char*)CNAME, maxCNAMElen);
 			CNAME[maxCNAMElen] = '\0'; 
-			RTCPInstance* rtcp = RTCPInstance::createNew(*env, &rtcpGroupsock,  estimatedSessionBandwidth, CNAME, videoSink, NULL);
+			RTCPInstance* rtcp = RTCPInstance::createNew(*env, &rtcpGroupsock,  500, CNAME, videoSink, NULL);
 			
 			// Create Server Session
 			ServerMediaSession* sms = ServerMediaSession::createNew(*env);
