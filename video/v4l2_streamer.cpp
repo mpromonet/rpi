@@ -24,8 +24,6 @@
 #include <BasicUsageEnvironment.hh>
 #include <GroupsockHelper.hh>
 
-#define DEBUG 0
-
 // V4L2 FramedSource
 // ---------------------------------
 class V4L2DeviceSource: public FramedSource 
@@ -35,8 +33,8 @@ class V4L2DeviceSource: public FramedSource
 		// ---------------------------------
 		struct V4L2DeviceParameters 
 		{
-			V4L2DeviceParameters(const char* devname, int format, int queueSize, int width, int height, int fps) : 
-				m_devName(devname), m_format(format), m_queueSize(queueSize), m_width(width), m_height(height), m_fps(fps) {};
+			V4L2DeviceParameters(const char* devname, int format, int queueSize, int width, int height, int fps, bool verbose) : 
+				m_devName(devname), m_format(format), m_queueSize(queueSize), m_width(width), m_height(height), m_fps(fps), m_verbose(verbose) {};
 				
 			std::string m_devName;
 			int m_width;
@@ -44,6 +42,7 @@ class V4L2DeviceSource: public FramedSource
 			int m_format;
 			int m_queueSize;
 			int m_fps;			
+			bool m_verbose;
 		};
 
 		// Captured frame
@@ -77,7 +76,6 @@ class V4L2DeviceSource: public FramedSource
 					}
 					return m_fps;
 				}
-			
 			
 			protected:
 				int m_fps;
@@ -175,10 +173,7 @@ class V4L2DeviceSource: public FramedSource
 			{
 				fprintf(stderr, "xioctl cannot set format error %d, %s\n", errno, strerror(errno));
 				return -1;
-			}
-			
-			fprintf(stderr, "fmt.fmt.pix.field:%X\n", fmt.fmt.pix.field);
-			
+			}			
 			if (fmt.fmt.pix.pixelformat != m_params.m_format) 
 			{
 				printf("Libv4l didn't accept format (%d). Can't proceed.\n", m_params.m_format);
@@ -199,7 +194,6 @@ class V4L2DeviceSource: public FramedSource
 			struct v4l2_streamparm   param;			
 			memset(&(param), 0, sizeof(param));
 			param.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-			param.parm.capture.capability = V4L2_CAP_TIMEPERFRAME;
 			param.parm.capture.timeperframe.numerator = 1;
 			param.parm.capture.timeperframe.denominator = m_params.m_fps;
 
@@ -260,9 +254,10 @@ class V4L2DeviceSource: public FramedSource
 			
 			if (m_captureQueue.empty())
 			{
-#if DEBUG				
-				envir() << "Queue is empty \n";		
-#endif				
+				if (m_params.m_verbose) 
+				{
+					envir() << "Queue is empty \n";		
+				}
 			}
 			else
 			{				
@@ -283,9 +278,12 @@ class V4L2DeviceSource: public FramedSource
 				}
 				timeval diff;
 				timersub(&fPresentationTime,&(frame->m_timestamp),&diff);
-#if DEBUG				
-				envir() << "Send frame:" << (int)frame->m_timestamp.tv_sec  <<  " " << (int)frame->m_timestamp.tv_usec << " " << (int)(diff.tv_sec*1000+diff.tv_usec/1000) << "ms\n";						
-#endif				
+				
+				if (m_params.m_verbose) 
+				{
+					envir() << "deliverFrame timestamp:" << (int)frame->m_timestamp.tv_sec  <<  " " << (int)frame->m_timestamp.tv_usec << " " << (int)(diff.tv_sec*1000+diff.tv_usec/1000) << "ms size:" << fFrameSize << "\n";						
+				}
+
 				memcpy(fTo, frame->m_buffer, fFrameSize);
 				delete frame;
 			}
@@ -318,30 +316,35 @@ class V4L2DeviceSource: public FramedSource
 				ftime(&current); 
 				
 				int fps = m_in.notify(current.time);
-#if DEBUG
-				envir() << "V4L2DeviceSource::incomingPacketHandler read time:"  << int((current.time-ref.time)*1000 + current.millitm-ref.millitm) << " ms size:" << frameSize << "\n";		
-				printf ("%02X%02X%02X%02X%02X%02X%02X%02X\n", buffer[0], buffer[1], buffer[2], buffer[3], buffer[4], buffer[5], buffer[6], buffer[7]);
-				char marker[] = {0,0,0,1};
-				for (int i=1; i<frameSize-4; ++i)
+				if (m_params.m_verbose) 
 				{
-					if (memcmp(&buffer[i],&marker,sizeof(marker))==0) printf ("match %d\n",i);
+					envir() << "readFrame time:"  << int((current.time-ref.time)*1000 + current.millitm-ref.millitm) << " ms size:" << frameSize << "\n";		
 				}
-#endif
-				while (m_captureQueue.size() >= m_params.m_queueSize)
-				{
-#if DEBUG						
-					envir() << "Queue full size drop frame size:"  << m_captureQueue.size() << " \n";		
-#endif						
-					delete m_captureQueue.front();
-					m_captureQueue.pop_front();
-				}
-				timeval tv;
-				tv.tv_sec = current.time;
-				tv.tv_usec = current.millitm * 1000;
-				m_captureQueue.push_back(new Frame(buffer, frameSize,tv));	  				
-				envir().taskScheduler().triggerEvent(m_eventTriggerId, this);
-			}
+				queueFrame(buffer,frameSize);
+			}			
 		}	
+		
+		void queueFrame(char * frame, int frameSize) 
+		{
+			while (m_captureQueue.size() >= m_params.m_queueSize)
+			{
+				if (m_params.m_verbose) 
+				{
+					envir() << "Queue full size drop frame size:"  << m_captureQueue.size() << " \n";		
+				}
+				delete m_captureQueue.front();
+				m_captureQueue.pop_front();
+			}
+			timeval tv;
+			gettimeofday(&tv, NULL);								
+			if (m_params.m_verbose) 
+			{
+				printf ("queue frame size:%d data:%02X%02X%02X%02X%02X...\n", frameSize, frame[0], frame[1], frame[2], frame[3], frame[4]);
+			}
+			m_captureQueue.push_back(new Frame(frame, frameSize,tv));	  				
+			envir().taskScheduler().triggerEvent(m_eventTriggerId, this);
+		}	
+		
 
 	private:
 		V4L2DeviceParameters m_params;
@@ -360,25 +363,88 @@ void sighandler(int n)
 	quit =1;
 }
 
-RTPSink* createSink(UsageEnvironment* env, Groupsock * gs, int format)
-{
-	RTPSink* videoSink = NULL;
-	switch (format)
-	{
-		case V4L2_PIX_FMT_H264 : videoSink = H264VideoRTPSink::createNew(*env, gs,96); break;
-	}
-	return videoSink;
-}
-
-FramedSource* createSource(UsageEnvironment* env, FramedSource * videoES, int format)
+FramedSource* createSource(UsageEnvironment& env, FramedSource * videoES, int format)
 {
 	FramedSource* source = NULL;
 	switch (format)
 	{
-		case V4L2_PIX_FMT_H264 : source = H264VideoStreamFramer::createNew(*env, videoES); break;
+		case V4L2_PIX_FMT_H264 : source = H264VideoStreamFramer::createNew(env, videoES); break;
 	}
 	return source;
 }
+
+RTPSink* createSink(UsageEnvironment& env, Groupsock * rtpGroupsock, unsigned char rtpPayloadTypeIfDynamic, int format)
+{
+	RTPSink* videoSink = NULL;
+	switch (format)
+	{
+		case V4L2_PIX_FMT_H264 : videoSink = H264VideoRTPSink::createNew(env, rtpGroupsock,rtpPayloadTypeIfDynamic); break;
+	}
+	return videoSink;
+}
+
+class MulticastServerMediaSubsession : public PassiveServerMediaSubsession 
+{
+	public:
+		static MulticastServerMediaSubsession* createNew(UsageEnvironment& env, struct in_addr destinationAddress, Port rtpPortNum, Port rtcpPortNum, int ttl, StreamReplicator* replicator, int format) 
+		{ 
+			FramedSource* source = replicator->createStreamReplica();
+			
+			FramedSource* videoSource = createSource(env, source, format);
+
+			// Create RTP/RTCP groupsock
+			Groupsock* rtpGroupsock = new Groupsock(env, destinationAddress, rtpPortNum, ttl);
+			Groupsock* rtcpGroupsock = new Groupsock(env, destinationAddress, rtcpPortNum, ttl);
+
+			// Create a RTP sink from the RTP 'groupsock':
+			RTPSink* videoSink = createSink(env,rtpGroupsock, 96, format);
+
+			// Create 'RTCP instance' for this RTP sink:
+			const unsigned maxCNAMElen = 100;
+			unsigned char CNAME[maxCNAMElen+1];
+			gethostname((char*)CNAME, maxCNAMElen);
+			CNAME[maxCNAMElen] = '\0'; 
+			RTCPInstance* rtcpInstance = RTCPInstance::createNew(env, rtcpGroupsock,  500, CNAME, videoSink, NULL);
+
+			// start 
+			videoSink->startPlaying(*videoSource, NULL, NULL);
+			
+			return new MulticastServerMediaSubsession(*videoSink,rtcpInstance);
+		}
+		
+	protected:
+		MulticastServerMediaSubsession(RTPSink& rtpSink, RTCPInstance* rtcpInstance) : PassiveServerMediaSubsession(rtpSink, rtcpInstance) {};			
+};
+
+class UnicastServerMediaSubsession : public OnDemandServerMediaSubsession 
+{
+	public:
+		static UnicastServerMediaSubsession* createNew(UsageEnvironment& env, StreamReplicator* replicator, int format) 
+		{ 
+			return new UnicastServerMediaSubsession(env,replicator,format);
+		}
+		
+	protected:
+		UnicastServerMediaSubsession(UsageEnvironment& env, StreamReplicator* replicator, int format) : OnDemandServerMediaSubsession(env, False), m_replicator(replicator), m_format(format) {};
+			
+		virtual FramedSource* createNewStreamSource(unsigned clientSessionId, unsigned& estBitrate)
+		{
+			FramedSource* source = m_replicator->createStreamReplica();
+			return createSource(envir(), source, m_format);
+		}
+		virtual RTPSink* createNewRTPSink(Groupsock* rtpGroupsock,  unsigned char rtpPayloadTypeIfDynamic, FramedSource* inputSource)
+		{
+			return createSink(envir(), rtpGroupsock,rtpPayloadTypeIfDynamic, m_format);
+		}
+		virtual char const* getAuxSDPLine(RTPSink* rtpSink,FramedSource* inputSource)
+		{
+			std::cout << "hardcoded SPS/PPS !!!!!!!!!" << std::endl;
+			return strdup("a=fmtp:96 packetization-mode=1;profile-level-id=64001F;sprop-parameter-sets=J2QAH6wrQFAe0A8SJqA=,KO4G8sA=\n");
+		}
+	protected:
+		StreamReplicator* m_replicator;
+		int m_format;
+};
 
 int main(int argc, char** argv) 
 {
@@ -394,13 +460,15 @@ int main(int argc, char** argv)
 	unsigned char ttl = 255;
 	struct in_addr destinationAddress;
 	unsigned short rtspPort = 8554;
+	bool verbose = false;
 
 	// decode parameters
 	int c = 0;     
-	while ((c = getopt (argc, argv, "hW:H:Q:P:F:")) != -1)
+	while ((c = getopt (argc, argv, "hW:H:Q:P:F:v")) != -1)
 	{
 		switch (c)
 		{
+			case 'v':	verbose = true; break;
 			case 'W':	width = atoi(optarg); break;
 			case 'H':	height = atoi(optarg); break;
 			case 'Q':	queueSize = atoi(optarg); break;
@@ -408,7 +476,7 @@ int main(int argc, char** argv)
 			case 'F':	fps = atoi(optarg); break;
 			case 'h':
 			{
-				std::cout << argv[0] << " [-P RTSP_port] [-Q queueSize] [-W width] [-H height] [-F fps] [device]" << std::endl;
+				std::cout << argv[0] << " [-v] [-m] [-P RTSP_port] [-Q queueSize] [-W width] [-H height] [-F fps] [device]" << std::endl;
 				exit(0);
 			}
 		}
@@ -418,7 +486,7 @@ int main(int argc, char** argv)
 		dev_name = argv[optind];
 	}
      
-	// start th job
+	// 
 	signal(SIGINT,sighandler);
 	TaskScheduler* scheduler = BasicTaskScheduler::createNew();
 	UsageEnvironment* env = BasicUsageEnvironment::createNew(*scheduler);	
@@ -432,7 +500,7 @@ int main(int argc, char** argv)
 	{		
 		// Init capture
 		*env << "Create V4L2 Source..." << dev_name << "\n";
-		V4L2DeviceSource::V4L2DeviceParameters param(dev_name,format,queueSize,width,height,fps);
+		V4L2DeviceSource::V4L2DeviceParameters param(dev_name,format,queueSize,width,height,fps,verbose);
 		V4L2DeviceSource* videoES = V4L2DeviceSource::createNew(*env, param);
 		if (videoES == NULL) 
 		{
@@ -440,39 +508,33 @@ int main(int argc, char** argv)
 		}
 		else
 		{
-			*env << "Create Framed Source...\n";
-			FramedSource* videoSource = createSource(env, videoES, format);
-
-			// Create RTP/RTCP groupsock
 			destinationAddress.s_addr = chooseRandomIPv4SSMAddress(*env);	
-			Groupsock rtpGroupsock(*env, destinationAddress, Port(rtpPortNum), ttl);
-			Groupsock rtcpGroupsock(*env, destinationAddress, Port(rtcpPortNum), ttl);
-
-			// Create a RTP sink from the RTP 'groupsock':
 			OutPacketBuffer::maxSize = videoES->getBufferSize();
-			RTPSink* videoSink = createSink(env,&rtpGroupsock, format);
+			StreamReplicator* replicator = StreamReplicator::createNew(*env, videoES);
 
-			// Create 'RTCP instance' for this RTP sink:
-			const unsigned maxCNAMElen = 100;
-			unsigned char CNAME[maxCNAMElen+1];
-			gethostname((char*)CNAME, maxCNAMElen);
-			CNAME[maxCNAMElen] = '\0'; 
-			RTCPInstance* rtcp = RTCPInstance::createNew(*env, &rtcpGroupsock,  500, CNAME, videoSink, NULL);
-			
-			// Create Server Session
-			ServerMediaSession* sms = ServerMediaSession::createNew(*env);
-			sms->addSubsession(PassiveServerMediaSubsession::createNew(*videoSink, rtcp));
-			rtspServer->addServerMediaSession(sms);
+			// Create Server Unicast Session
+			{
+				FramedSource* source = replicator->createStreamReplica();
+				ServerMediaSession* sms = ServerMediaSession::createNew(*env, "unicast");
+				sms->addSubsession(UnicastServerMediaSubsession::createNew(*env,replicator,format));
+				rtspServer->addServerMediaSession(sms);
 
-			// print the session URL
-			char* url = rtspServer->rtspURL(sms);
-			*env << "Play this stream using the URL \"" << url << "\"\n";
-			delete[] url;
-			
-			// Start playing:
-			*env << "Starting...\n";
-			videoSink->startPlaying(*videoSource, NULL, videoSink);
-			
+				char* url = rtspServer->rtspURL(sms);
+				*env << "Play this stream using the URL \"" << url << "\"\n";
+				delete[] url;			
+			}
+
+			// Create Server Multicast Session
+			{
+				ServerMediaSession* sms = ServerMediaSession::createNew(*env, "multicast");
+				sms->addSubsession(MulticastServerMediaSubsession::createNew(*env,destinationAddress, Port(rtpPortNum), Port(rtcpPortNum), ttl, replicator,format));
+				rtspServer->addServerMediaSession(sms);
+
+				char* url = rtspServer->rtspURL(sms);
+				*env << "Play this stream using the URL \"" << url << "\"\n";
+				delete[] url;			
+			}
+
 			// main loop
 			env->taskScheduler().doEventLoop(&quit); 
 			*env << "Exiting..\n";			
