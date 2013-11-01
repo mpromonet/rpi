@@ -1,5 +1,5 @@
 /* V4L2 RTSP streamer */
-
+/* -------------------------------- */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,7 +8,6 @@
 #include <sys/ioctl.h>
 #include <sys/types.h>
 #include <sys/time.h>
-#include <sys/mman.h>
 #include <linux/videodev2.h>
 #include <sys/timeb.h>
 #include <signal.h>
@@ -33,8 +32,8 @@ class V4L2DeviceSource: public FramedSource
 		// ---------------------------------
 		struct V4L2DeviceParameters 
 		{
-			V4L2DeviceParameters(const char* devname, int format, int queueSize, int width, int height, int fps, bool verbose) : 
-				m_devName(devname), m_format(format), m_queueSize(queueSize), m_width(width), m_height(height), m_fps(fps), m_verbose(verbose) {};
+			V4L2DeviceParameters(const char* devname, int format, int queueSize, int width, int height, int fps, bool verbose,const std::string & outputFile) : 
+				m_devName(devname), m_format(format), m_queueSize(queueSize), m_width(width), m_height(height), m_fps(fps), m_verbose(verbose), m_outputFIle(outputFile) {};
 				
 			std::string m_devName;
 			int m_width;
@@ -43,6 +42,7 @@ class V4L2DeviceSource: public FramedSource
 			int m_queueSize;
 			int m_fps;			
 			bool m_verbose;
+			std::string m_outputFIle;
 		};
 
 		// Captured frame
@@ -97,7 +97,7 @@ class V4L2DeviceSource: public FramedSource
 		int getBufferSize() { return m_bufferSize; };
 
 	protected:
-		V4L2DeviceSource(UsageEnvironment& env, V4L2DeviceParameters params) : FramedSource(env), m_params(params), m_fd(-1), m_bufferSize(0), m_in("in"), m_out("out") 
+		V4L2DeviceSource(UsageEnvironment& env, V4L2DeviceParameters params) : FramedSource(env), m_params(params), m_fd(-1), m_bufferSize(0), m_in("in"), m_out("out") , m_outfile(NULL)
 		{
 			m_eventTriggerId = envir().taskScheduler().createEventTrigger(V4L2DeviceSource::deliverFrameStub);
 		}
@@ -106,6 +106,7 @@ class V4L2DeviceSource: public FramedSource
 		{
 			envir().taskScheduler().deleteEventTrigger(m_eventTriggerId);
 			v4l2_close(m_fd);
+			if (m_outfile) fclose(m_outfile);
 		}
 
 	protected:
@@ -231,6 +232,11 @@ class V4L2DeviceSource: public FramedSource
 			{
 				return -1;
 			}
+			if (!m_params.m_outputFIle.empty())
+			{
+				fprintf(stderr, "OutputFile:%s\n", m_params.m_outputFIle.c_str());
+				m_outfile = fopen(m_params.m_outputFIle.c_str(),"w");
+			}
 			
 			return fd;
 		}
@@ -238,11 +244,10 @@ class V4L2DeviceSource: public FramedSource
 		virtual void doGetNextFrame()
 		{
 		}
-		
+				
 		static void deliverFrameStub(void* clientData)
 		{
-			V4L2DeviceSource* source = (V4L2DeviceSource*) clientData;
-			source->deliverFrame();
+			((V4L2DeviceSource*) clientData)->deliverFrame();
 		}	
 		
 		virtual void deliverFrame()
@@ -281,9 +286,8 @@ class V4L2DeviceSource: public FramedSource
 				
 				if (m_params.m_verbose) 
 				{
-					envir() << "deliverFrame timestamp:" << (int)frame->m_timestamp.tv_sec  <<  " " << (int)frame->m_timestamp.tv_usec << " " << (int)(diff.tv_sec*1000+diff.tv_usec/1000) << "ms size:" << fFrameSize << "\n";						
+					printf ("deliverFrame\ttimestamp:%d.%06d\tsize:%d diff:%d ms queue:%d\n",fPresentationTime.tv_sec, fPresentationTime.tv_usec, fFrameSize,  (int)(diff.tv_sec*1000+diff.tv_usec/1000),  m_captureQueue.size());
 				}
-
 				memcpy(fTo, frame->m_buffer, fFrameSize);
 				delete frame;
 			}
@@ -292,11 +296,10 @@ class V4L2DeviceSource: public FramedSource
 		
 		static void incomingPacketHandlerStub(void* clientData, int mask)
 		{
-			V4L2DeviceSource* source = (V4L2DeviceSource*) clientData;
-			source->incomingPacketHandler(mask);
+			((V4L2DeviceSource*) clientData)->getNextFrame();
 		}	
 		
-		void incomingPacketHandler(int mask) 
+		void getNextFrame() 
 		{
 			char* buffer = new char[m_bufferSize];
 			
@@ -306,7 +309,7 @@ class V4L2DeviceSource: public FramedSource
 			
 			if (frameSize < 0)
 			{
-				envir() << "V4L2DeviceSource::incomingPacketHandler fd:"  << m_fd << " mask:" << mask << " errno:" << errno << " "  << strerror(errno) << "\n";		
+				envir() << "V4L2DeviceSource::getNextFrame fd:"  << m_fd << " errno:" << errno << " "  << strerror(errno) << "\n";		
 				delete buffer;
 				handleClosure(this);
 			}
@@ -318,7 +321,7 @@ class V4L2DeviceSource: public FramedSource
 				int fps = m_in.notify(current.time);
 				if (m_params.m_verbose) 
 				{
-					envir() << "readFrame time:"  << int((current.time-ref.time)*1000 + current.millitm-ref.millitm) << " ms size:" << frameSize << "\n";		
+					printf ("getNextFrame\ttimestamp:%d.%06d\tsize:%d diff:%d ms queue:%d\n", current.time, current.millitm, frameSize, int((current.time-ref.time)*1000 + current.millitm-ref.millitm), m_captureQueue.size());
 				}
 				queueFrame(buffer,frameSize);
 			}			
@@ -339,8 +342,9 @@ class V4L2DeviceSource: public FramedSource
 			gettimeofday(&tv, NULL);								
 			if (m_params.m_verbose) 
 			{
-				printf ("queue frame size:%d data:%02X%02X%02X%02X%02X...\n", frameSize, frame[0], frame[1], frame[2], frame[3], frame[4]);
+				printf ("queueFrame\ttimestamp:%d.%06d\tsize:%d queue:%d data:%02X%02X%02X%02X%02X...\n", tv.tv_sec, tv.tv_usec, frameSize, m_captureQueue.size(), frame[0], frame[1], frame[2], frame[3], frame[4]);
 			}
+			if (m_outfile) fwrite(frame, frameSize,1, m_outfile);
 			m_captureQueue.push_back(new Frame(frame, frameSize,tv));	  				
 			envir().taskScheduler().triggerEvent(m_eventTriggerId, this);
 		}	
@@ -354,6 +358,7 @@ class V4L2DeviceSource: public FramedSource
 		Fps m_in;
 		Fps m_out;
 		EventTriggerId m_eventTriggerId;
+		FILE* m_outfile;
 };
 
 char quit = 0;
@@ -414,6 +419,7 @@ class MulticastServerMediaSubsession : public PassiveServerMediaSubsession
 		
 	protected:
 		MulticastServerMediaSubsession(RTPSink& rtpSink, RTCPInstance* rtcpInstance) : PassiveServerMediaSubsession(rtpSink, rtcpInstance) {};			
+
 };
 
 class UnicastServerMediaSubsession : public OnDemandServerMediaSubsession 
@@ -436,8 +442,14 @@ class UnicastServerMediaSubsession : public OnDemandServerMediaSubsession
 		{
 			return createSink(envir(), rtpGroupsock,rtpPayloadTypeIfDynamic, m_format);
 		}
+		
 		virtual char const* getAuxSDPLine(RTPSink* rtpSink,FramedSource* inputSource)
 		{
+			V4L2DeviceSource* source = dynamic_cast<V4L2DeviceSource*>(m_replicator->inputSource());
+			if (source)
+			{
+			} 
+
 			std::cout << "hardcoded SPS/PPS !!!!!!!!!" << std::endl;
 			return strdup("a=fmtp:96 packetization-mode=1;profile-level-id=64001F;sprop-parameter-sets=J2QAH6wrQFAe0A8SJqA=,KO4G8sA=\n");
 		}
@@ -461,13 +473,15 @@ int main(int argc, char** argv)
 	struct in_addr destinationAddress;
 	unsigned short rtspPort = 8554;
 	bool verbose = false;
+	std::string outputFile;
 
 	// decode parameters
 	int c = 0;     
-	while ((c = getopt (argc, argv, "hW:H:Q:P:F:v")) != -1)
+	while ((c = getopt (argc, argv, "hW:H:Q:P:F:vO:")) != -1)
 	{
 		switch (c)
 		{
+			case 'O':	outputFile = optarg; break;
 			case 'v':	verbose = true; break;
 			case 'W':	width = atoi(optarg); break;
 			case 'H':	height = atoi(optarg); break;
@@ -476,7 +490,7 @@ int main(int argc, char** argv)
 			case 'F':	fps = atoi(optarg); break;
 			case 'h':
 			{
-				std::cout << argv[0] << " [-v] [-m] [-P RTSP_port] [-Q queueSize] [-W width] [-H height] [-F fps] [device]" << std::endl;
+				std::cout << argv[0] << " [-v] [-m] [-P RTSP_port] [-Q queueSize] [-W width] [-H height] [-F fps] [-O output file] [device]" << std::endl;
 				exit(0);
 			}
 		}
@@ -500,7 +514,7 @@ int main(int argc, char** argv)
 	{		
 		// Init capture
 		*env << "Create V4L2 Source..." << dev_name << "\n";
-		V4L2DeviceSource::V4L2DeviceParameters param(dev_name,format,queueSize,width,height,fps,verbose);
+		V4L2DeviceSource::V4L2DeviceParameters param(dev_name,format,queueSize,width,height,fps,verbose,outputFile);
 		V4L2DeviceSource* videoES = V4L2DeviceSource::createNew(*env, param);
 		if (videoES == NULL) 
 		{
@@ -512,22 +526,21 @@ int main(int argc, char** argv)
 			OutPacketBuffer::maxSize = videoES->getBufferSize();
 			StreamReplicator* replicator = StreamReplicator::createNew(*env, videoES);
 
-			// Create Server Unicast Session
+			// Create Server Multicast Session
 			{
-				FramedSource* source = replicator->createStreamReplica();
-				ServerMediaSession* sms = ServerMediaSession::createNew(*env, "unicast");
-				sms->addSubsession(UnicastServerMediaSubsession::createNew(*env,replicator,format));
+				ServerMediaSession* sms = ServerMediaSession::createNew(*env, "multicast");
+				sms->addSubsession(MulticastServerMediaSubsession::createNew(*env,destinationAddress, Port(rtpPortNum), Port(rtcpPortNum), ttl, replicator,format));
 				rtspServer->addServerMediaSession(sms);
 
 				char* url = rtspServer->rtspURL(sms);
 				*env << "Play this stream using the URL \"" << url << "\"\n";
 				delete[] url;			
 			}
-
-			// Create Server Multicast Session
+			
+			// Create Server Unicast Session
 			{
-				ServerMediaSession* sms = ServerMediaSession::createNew(*env, "multicast");
-				sms->addSubsession(MulticastServerMediaSubsession::createNew(*env,destinationAddress, Port(rtpPortNum), Port(rtcpPortNum), ttl, replicator,format));
+				ServerMediaSession* sms = ServerMediaSession::createNew(*env, "unicast");
+				sms->addSubsession(UnicastServerMediaSubsession::createNew(*env,replicator,format));
 				rtspServer->addServerMediaSession(sms);
 
 				char* url = rtspServer->rtspURL(sms);
