@@ -288,7 +288,14 @@ class V4L2DeviceSource: public FramedSource
 				{
 					printf ("deliverFrame\ttimestamp:%d.%06d\tsize:%d diff:%d ms queue:%d\n",fPresentationTime.tv_sec, fPresentationTime.tv_usec, fFrameSize,  (int)(diff.tv_sec*1000+diff.tv_usec/1000),  m_captureQueue.size());
 				}
-				memcpy(fTo, frame->m_buffer, fFrameSize);
+				char marker[] = {0,0,0,1};
+				int offset = 0;
+				if (memcmp(frame->m_buffer,marker,sizeof(marker)) == 0)
+				{
+					offset = 4;
+					fFrameSize -= offset;
+				}
+				memcpy(fTo, frame->m_buffer+offset, fFrameSize);
 				delete frame;
 			}
 			FramedSource::afterGetting(this);
@@ -303,8 +310,8 @@ class V4L2DeviceSource: public FramedSource
 		{
 			char* buffer = new char[m_bufferSize];
 			
-			struct timeb ref;
-			ftime(&ref); 
+			timeval ref;
+			gettimeofday(&ref, NULL);											
 			int frameSize = v4l2_read(m_fd, buffer,  m_bufferSize);
 			
 			if (frameSize < 0)
@@ -315,13 +322,14 @@ class V4L2DeviceSource: public FramedSource
 			}
 			else
 			{
-				struct timeb current;
-				ftime(&current); 
-				
-				int fps = m_in.notify(current.time);
+				timeval tv;
+				gettimeofday(&tv, NULL);												
+				timeval diff;
+				timersub(&tv,&ref,&diff);
+				int fps = m_in.notify(tv.tv_sec);
 				if (m_params.m_verbose) 
 				{
-					printf ("getNextFrame\ttimestamp:%d.%06d\tsize:%d diff:%d ms queue:%d\n", current.time, current.millitm, frameSize, int((current.time-ref.time)*1000 + current.millitm-ref.millitm), m_captureQueue.size());
+					printf ("getNextFrame\ttimestamp:%d.%06d\tsize:%d diff:%d ms queue:%d\n", tv.tv_sec, tv.tv_usec, frameSize, (int)(diff.tv_sec*1000+diff.tv_usec/1000), m_captureQueue.size());
 				}
 				queueFrame(buffer,frameSize);
 			}			
@@ -373,7 +381,7 @@ FramedSource* createSource(UsageEnvironment& env, FramedSource * videoES, int fo
 	FramedSource* source = NULL;
 	switch (format)
 	{
-		case V4L2_PIX_FMT_H264 : source = H264VideoStreamFramer::createNew(env, videoES); break;
+		case V4L2_PIX_FMT_H264 : source = H264VideoStreamDiscreteFramer::createNew(env, videoES); break;
 	}
 	return source;
 }
