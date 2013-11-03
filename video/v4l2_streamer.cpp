@@ -13,6 +13,8 @@
 #include <signal.h>
 #include <string>
 #include <iostream>
+#include <iomanip>
+#include <sstream>
 #include <list>
 
 // libv4l2
@@ -22,6 +24,7 @@
 #include <liveMedia.hh>
 #include <BasicUsageEnvironment.hh>
 #include <GroupsockHelper.hh>
+#include <Base64.hh>
 
 // V4L2 FramedSource
 // ---------------------------------
@@ -95,6 +98,7 @@ class V4L2DeviceSource: public FramedSource
 			return device;
 		}
 		int getBufferSize() { return m_bufferSize; };
+		std::string getAuxLine() { return m_auxLine; };
 
 	protected:
 		V4L2DeviceSource(UsageEnvironment& env, V4L2DeviceParameters params) : FramedSource(env), m_params(params), m_fd(-1), m_bufferSize(0), m_in("in"), m_out("out") , m_outfile(NULL)
@@ -292,9 +296,50 @@ class V4L2DeviceSource: public FramedSource
 				int offset = 0;
 				if (memcmp(frame->m_buffer,marker,sizeof(marker)) == 0)
 				{
-					offset = 4;
+					offset = sizeof(marker);
 					fFrameSize -= offset;
 				}
+				
+				// save SPS and PPS
+				u_int8_t nal_unit_type = frame->m_buffer[offset]&0x1F;				
+				if (nal_unit_type == 7)
+				{
+					std::cout << "SPS \n";	
+					for (int i=offset; i < fFrameSize; ++i)
+					{
+						if (memcmp(&frame->m_buffer[i],marker,sizeof(marker)) == 0)
+						{
+							std::cout << "PPS \n";	
+							size_t spsSize = i - offset;
+							char* sps = (char*)memcpy(new char [spsSize], &frame->m_buffer[offset], spsSize);
+							size_t ppsSize = fFrameSize - spsSize - sizeof(marker);
+							char* pps = (char*)memcpy(new char [ppsSize], &frame->m_buffer[offset+spsSize+sizeof(marker)], ppsSize);
+							u_int32_t profile_level_id = 0;
+							if (spsSize >= 4) 
+							{
+								profile_level_id = (sps[1]<<16)|(sps[2]<<8)|sps[3]; 
+							}
+							
+							char* sps_base64 = base64Encode(sps, spsSize);
+							char* pps_base64 = base64Encode(pps, ppsSize);		
+
+							std::ostringstream os; 
+							os << "a=fmtp:96 packetization-mode=1";
+							os << ";profile-level-id=" << std::hex << std::setw(6) << profile_level_id;
+							os << ";sprop-parameter-sets=" << sps_base64 <<"," << pps_base64;
+							os << "\r\n";
+							m_auxLine.assign(os.str());
+							
+							free(sps);
+							free(pps);
+							free(sps_base64);
+							free(pps_base64);
+							
+							std::cout << "AuxLine:"  << m_auxLine << " \n";		
+						}						
+					}
+				}
+				
 				memcpy(fTo, frame->m_buffer+offset, fFrameSize);
 				delete frame;
 			}
@@ -339,10 +384,7 @@ class V4L2DeviceSource: public FramedSource
 		{
 			while (m_captureQueue.size() >= m_params.m_queueSize)
 			{
-				if (m_params.m_verbose) 
-				{
-					envir() << "Queue full size drop frame size:"  << m_captureQueue.size() << " \n";		
-				}
+				envir() << "Queue full size drop frame size:"  << m_captureQueue.size() << " \n";		
 				delete m_captureQueue.front();
 				m_captureQueue.pop_front();
 			}
@@ -367,6 +409,7 @@ class V4L2DeviceSource: public FramedSource
 		Fps m_out;
 		EventTriggerId m_eventTriggerId;
 		FILE* m_outfile;
+		std::string m_auxLine;
 };
 
 char quit = 0;
@@ -422,12 +465,38 @@ class MulticastServerMediaSubsession : public PassiveServerMediaSubsession
 			// start 
 			videoSink->startPlaying(*videoSource, NULL, NULL);
 			
-			return new MulticastServerMediaSubsession(*videoSink,rtcpInstance);
+			return new MulticastServerMediaSubsession(replicator, *videoSink,rtcpInstance);
 		}
 		
 	protected:
-		MulticastServerMediaSubsession(RTPSink& rtpSink, RTCPInstance* rtcpInstance) : PassiveServerMediaSubsession(rtpSink, rtcpInstance) {};			
+		MulticastServerMediaSubsession(StreamReplicator* replicator, RTPSink& rtpSink, RTCPInstance* rtcpInstance) : PassiveServerMediaSubsession(rtpSink, rtcpInstance), m_replicator(replicator), m_rtpSink(&rtpSink), m_rtcpInstance(rtcpInstance) {};			
 
+		virtual char const* sdpLines() 
+		{
+			if (m_SDPLines.empty())
+			{
+				m_SDPLines.assign(PassiveServerMediaSubsession::sdpLines());
+				m_SDPLines.append(getAuxSDPLine(m_rtpSink,NULL));
+			}
+			return m_SDPLines.c_str();
+		}
+
+		virtual char const* getAuxSDPLine(RTPSink* rtpSink,FramedSource* inputSource)
+		{
+			V4L2DeviceSource* source = dynamic_cast<V4L2DeviceSource*>(m_replicator->inputSource());
+			const char* auxLine = NULL;
+			if (source)
+			{
+				auxLine = strdup(source->getAuxLine().c_str());
+			} 
+			return auxLine;
+		}
+		
+	protected:
+		StreamReplicator* m_replicator;	
+		std::string m_SDPLines;
+		RTPSink* m_rtpSink;
+		RTCPInstance* m_rtcpInstance;
 };
 
 class UnicastServerMediaSubsession : public OnDemandServerMediaSubsession 
@@ -454,12 +523,12 @@ class UnicastServerMediaSubsession : public OnDemandServerMediaSubsession
 		virtual char const* getAuxSDPLine(RTPSink* rtpSink,FramedSource* inputSource)
 		{
 			V4L2DeviceSource* source = dynamic_cast<V4L2DeviceSource*>(m_replicator->inputSource());
+			const char* auxLine = NULL;
 			if (source)
 			{
+				auxLine = strdup(source->getAuxLine().c_str());
 			} 
-
-			std::cout << "hardcoded SPS/PPS !!!!!!!!!" << std::endl;
-			return strdup("a=fmtp:96 packetization-mode=1;profile-level-id=64001F;sprop-parameter-sets=J2QAH6wrQFAe0A8SJqA=,KO4G8sA=\n");
+			return auxLine;
 		}
 	protected:
 		StreamReplicator* m_replicator;
