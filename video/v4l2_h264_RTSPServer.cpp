@@ -306,6 +306,11 @@ class V4L2DeviceSource: public FramedSource
 				delete frame;
 			}
 			FramedSource::afterGetting(this);
+			
+			if (!m_captureQueue.empty())
+			{
+				nextTask() = envir().taskScheduler().scheduleDelayedTask(0, V4L2DeviceSource::deliverFrameStub, this);
+			}
 		}
 		
 		static void incomingPacketHandlerStub(void* clientData, int mask)
@@ -591,7 +596,7 @@ class UnicastServerMediaSubsession : public OnDemandServerMediaSubsession , publ
 };
 
 // -----------------------------------------
-//    signale handler
+//    signal handler
 // -----------------------------------------
 char quit = 0;
 void sighandler(int n)
@@ -606,7 +611,7 @@ void sighandler(int n)
 int main(int argc, char** argv) 
 {
 	// default parameters
-	char *dev_name = "/dev/video0";	
+	const char *dev_name = "/dev/video0";	
 	int format = V4L2_PIX_FMT_H264;
 	int width = 640;
 	int height = 480;
