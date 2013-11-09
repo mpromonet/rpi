@@ -341,12 +341,12 @@ class V4L2DeviceSource: public FramedSource
 				int fps = m_in.notify(tv.tv_sec);
 				if (m_params.m_verbose) 
 				{
-					printf ("getNextFrame\ttimestamp:%d.%06d\tsize:%d diff:%d ms queue:%d\n", tv.tv_sec, tv.tv_usec, frameSize, (int)(diff.tv_sec*1000+diff.tv_usec/1000), m_captureQueue.size());
+					printf ("getNextFrame\ttimestamp:%d.%06d\tsize:%d diff:%d ms queue:%d\n", ref.tv_sec, ref.tv_usec, frameSize, (int)(diff.tv_sec*1000+diff.tv_usec/1000), m_captureQueue.size());
 				}
-				processFrame(buffer,frameSize);
+				processFrame(buffer,frameSize,ref);
 				if (!processConfigrationFrame(buffer,frameSize))
 				{
-					queueFrame(buffer,frameSize,tv);
+					queueFrame(buffer,frameSize,ref);
 				}
 			}			
 		}	
@@ -401,13 +401,16 @@ class V4L2DeviceSource: public FramedSource
 			return ret;
 		}
 		
-		void processFrame(char * frame, int &frameSize) 
+		void processFrame(char * frame, int &frameSize, const timeval &ref) 
 		{
 			timeval tv;
-			gettimeofday(&tv, NULL);								
+			gettimeofday(&tv, NULL);												
+			timeval diff;
+			timersub(&tv,&ref,&diff);
+			
 			if (m_params.m_verbose) 
 			{
-				printf ("queueFrame\ttimestamp:%d.%06d\tsize:%d queue:%d data:%02X%02X%02X%02X%02X...\n", tv.tv_sec, tv.tv_usec, frameSize, m_captureQueue.size(), frame[0], frame[1], frame[2], frame[3], frame[4]);
+				printf ("queueFrame\ttimestamp:%d.%06d\tsize:%d diff:%d ms queue:%d data:%02X%02X%02X%02X%02X...\n", ref.tv_sec, ref.tv_usec, frameSize, (int)(diff.tv_sec*1000+diff.tv_usec/1000), m_captureQueue.size(), frame[0], frame[1], frame[2], frame[3], frame[4]);
 			}
 			if (m_outfile) fwrite(frame, frameSize,1, m_outfile);
 
