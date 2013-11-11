@@ -2,8 +2,6 @@
  * ALSA Driver for MCP3002 ADC
  */
 
-/*#define DEBUG*/
-
 #include <linux/err.h>
 #include <linux/delay.h>
 #include <linux/device.h>
@@ -38,8 +36,6 @@ struct snd_mcp3002 {
 	u8				spi_rbuffer[2];
 	/* Protect SSC registers against concurrent access. */
 	spinlock_t			lock;
-	/* Protect mixer registers against concurrent access. */
-	struct mutex			mixer_lock;
 };
 
 static int snd_mcp3002_write_reg(struct snd_mcp3002 *chip, u8 reg, u8 val)
@@ -321,7 +317,6 @@ static int snd_mcp3002_dev_init(struct snd_card *card,
 	int retval;
 
 	spin_lock_init(&chip->lock);
-	mutex_init(&chip->mixer_lock);
 	chip->card = card;
 	
 	retval = snd_mcp3002_chip_init(chip);
@@ -357,7 +352,7 @@ static int snd_mcp3002_probe(struct spi_device *spi)
 	printk("snd_mcp3002_probe\n");
 	
 	/* Allocate "card" using some unused identifiers. */
-	snprintf(id, sizeof id, "spisound");
+	snprintf(id, sizeof id, KBUILD_MODNAME);
 	retval = snd_card_create(-1, id, THIS_MODULE, sizeof(struct snd_mcp3002), &card);
 	if (retval < 0)
 		goto out;

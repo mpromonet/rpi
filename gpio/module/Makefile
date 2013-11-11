@@ -1,4 +1,4 @@
-obj-m := hello.o gpio-mcp23008.o i2c.o spisound.o
+obj-m := hello.o gpio-mcp23008.o i2c.o spi-mcp3002.o
 KERNELVERSION ?= $(shell uname -r)
 KDIR := /lib/modules/$(KERNELVERSION)/build
 PWD := $(shell pwd)
