@@ -6,10 +6,6 @@
  */
 
 /* Kernel Programming */
-#define MODULE
-#define LINUX
-#define __KERNEL__
-
 #include <linux/module.h>      /* Needed by all modules */
 #include <linux/kernel.h>      /* Needed for KERN_ALERT */
 #include <linux/init.h>        /* Needed for the macros */
@@ -19,14 +15,14 @@ static int hello3_data __initdata = 3;
 
 static int __init hello_3_init(void)
 {
-   printk(KERN_ALERT "Hello, world %d\n", hello3_data);
+   printk(KERN_ALERT "Hello, name:%s data:%d\n", KBUILD_MODNAME, hello3_data);
    return 0;
 }
 
 
 static void __exit hello_3_exit(void)
 {
-   printk(KERN_ALERT "Goodbye, world 3\n");
+   printk(KERN_ALERT "Goodbye, name:%s\n", KBUILD_MODNAME);
 }
 
 
