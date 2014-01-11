@@ -34,7 +34,6 @@ struct snd_mcp3002 {
 	struct timer_list 		timer;
 	u8				spi_wbuffer[2];
 	u8				spi_rbuffer[2];
-	/* Protect SSC registers against concurrent access. */
 	spinlock_t			lock;
 };
 
@@ -86,16 +85,11 @@ static int snd_mcp3002_set_bitrate(struct snd_mcp3002 *chip)
 	unsigned long ssc_div;
 	int status;
 	unsigned long ssc_div_max, ssc_div_min;
-	int max_tries;
 
 	/* SSC clock / (bitrate * stereo * 16-bit). */
 	ssc_div = ssc_rate / (BITRATE_TARGET * 2 * 16);
 	ssc_div_min = ssc_rate / (BITRATE_MAX * 2 * 16);
 	ssc_div_max = ssc_rate / (BITRATE_MIN * 2 * 16);
-	max_tries = (ssc_div_max - ssc_div_min) / 2;
-
-	if (max_tries < 1)
-		max_tries = 1;
 
 	/* ssc_div must be even. */
 	ssc_div = (ssc_div + 1) & ~1UL;
@@ -116,6 +110,9 @@ static int snd_mcp3002_set_bitrate(struct snd_mcp3002 *chip)
 	return 0;
 }
 
+// =======================
+// PCM callbacks
+// =======================
 static int snd_mcp3002_pcm_open(struct snd_pcm_substream *substream)
 {
 	struct snd_mcp3002 *chip = snd_pcm_substream_chip(substream);
@@ -208,28 +205,11 @@ static struct snd_pcm_ops snd_mcp3002_capture_ops = {
 	.trigger	= snd_mcp3002_pcm_trigger,
 	.pointer	= snd_mcp3002_pcm_pointer,
 };
+// =======================
 
-static int snd_mcp3002_pcm_new(struct snd_mcp3002 *chip, int device)
-{
-	struct snd_pcm *pcm;
-	int retval;
-
-	retval = snd_pcm_new(chip->card, chip->card->shortname, device, 1, 0, &pcm);
-	if (retval < 0)
-		goto out;
-
-	pcm->private_data = chip;
-	pcm->info_flags = SNDRV_PCM_INFO_BLOCK_TRANSFER;
-	strcpy(pcm->name, "mcp3002");
-	chip->pcm = pcm;
-
-	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &snd_mcp3002_capture_ops);
-
-	retval = snd_pcm_lib_preallocate_pages_for_all(chip->pcm, SNDRV_DMA_TYPE_DEV, NULL, 64 * 1024, 64 * 1024);
-out:
-	return retval;
-}
-
+// =======================
+// timer callback
+// =======================
 static void my_timer_callback( unsigned long data )
 {
 	struct snd_mcp3002 *chip = (struct snd_mcp3002 *)data;
@@ -267,26 +247,51 @@ static void my_timer_callback( unsigned long data )
 	if (status)
 		snd_pcm_period_elapsed(chip->substream);
 
+	retval = mod_timer( &chip->timer, jiffies + msecs_to_jiffies(200) );
+	if (retval) 
+		printk("Error in mod_timer\n");	
 }
 
-/*
- * Device functions
- */
+static int snd_mcp3002_pcm_new(struct snd_mcp3002 *chip, int device)
+{
+	struct snd_pcm *pcm;
+	int retval;
+
+	retval = snd_pcm_new(chip->card, chip->card->shortname, device, 0, 1, &pcm);
+	if (retval < 0)
+		goto out;
+
+	pcm->private_data = chip;
+	pcm->info_flags = SNDRV_PCM_INFO_BLOCK_TRANSFER;
+	strcpy(pcm->name, "mcp3002");
+	chip->pcm = pcm;
+
+	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &snd_mcp3002_capture_ops);
+
+	retval = snd_pcm_lib_preallocate_pages_for_all(chip->pcm, SNDRV_DMA_TYPE_DEV, NULL, 64 * 1024, 64 * 1024);
+out:
+	return retval;
+}
+
 static int snd_mcp3002_chip_init(struct snd_mcp3002 *chip)
 {
 	int retval;
 
 	retval = snd_mcp3002_set_bitrate(chip);
 	if (retval)
+	{
+		printk("snd_mcp3002_set_bitrate failed:%d\n", retval);
 		goto out;
+	}
 
 	setup_timer( &chip->timer, my_timer_callback, chip );
 
 	printk( "Starting timer to fire in 200ms (%ld)\n", jiffies );
 	retval = mod_timer( &chip->timer, jiffies + msecs_to_jiffies(200) );
-	
 	if (retval) 
+	{
 		printk("Error in mod_timer\n");
+	}
 	
 	goto out;
 
@@ -297,12 +302,12 @@ out:
 static int snd_mcp3002_dev_free(struct snd_device *device)
 {
 	struct snd_mcp3002 *chip = device->device_data;
-	int retval;
-
-	retval = del_timer( &chip->timer );
-	if (retval) printk("The timer is still in use...\n");
-
-	printk("Timer module uninstalling\n");
+	int retval = del_timer( &chip->timer );
+	
+	if (retval) 
+	{
+		printk("The timer is still in use...\n");
+	}
 	
 	return 0;
 }
@@ -321,15 +326,24 @@ static int snd_mcp3002_dev_init(struct snd_card *card,
 	
 	retval = snd_mcp3002_chip_init(chip);
 	if (retval)
+	{
+		printk("snd_mcp3002_chip_init failed:%d\n", retval);
 		goto out;
+	}
 
 	retval = snd_mcp3002_pcm_new(chip, 0);
 	if (retval)
+	{
+		printk("snd_mcp3002_pcm_new failed:%d\n", retval);
 		goto out;
+	}
 
 	retval = snd_device_new(card, SNDRV_DEV_LOWLEVEL, chip, &ops);
 	if (retval)
+	{
+		printk("snd_device_new failed:%d\n", retval);
 		goto out;
+	}
 
 	snd_card_set_dev(card, &spi->dev);
 
@@ -351,27 +365,37 @@ static int snd_mcp3002_probe(struct spi_device *spi)
 
 	printk("snd_mcp3002_probe\n");
 	
-	/* Allocate "card" using some unused identifiers. */
+	// alsa card initialization
 	snprintf(id, sizeof id, KBUILD_MODNAME);
 	retval = snd_card_create(-1, id, THIS_MODULE, sizeof(struct snd_mcp3002), &card);
 	if (retval < 0)
+	{
+		printk("snd_card_create failed:%d\n", retval);
 		goto out;
+	}
 
+	strcpy(card->driver, KBUILD_MODNAME);
+	strcpy(card->shortname, KBUILD_MODNAME);
+	strcpy(card->longname, KBUILD_MODNAME);
+
+	retval = snd_card_register(card);
+	if (retval)
+	{
+		printk("snd_card_register failed:%d\n", retval);
+		goto out_card;
+	}
+
+	// spi initialization
 	chip = card->private_data;
 	chip->spi = spi;
 
 	retval = snd_mcp3002_dev_init(card, spi);
-	if (retval)
+	if (retval) 
+	{
+		printk("snd_mcp3002_dev_init failed:%d\n", retval);
 		goto out_card;
-	
-	strcpy(card->driver, "spisound");
-	strcpy(card->shortname, "spisound");
-	strcpy(card->longname, "spisound");
-
-	retval = snd_card_register(card);
-	if (retval)
-		goto out_card;
-
+	}
+		
 	dev_set_drvdata(&spi->dev, card);
 
 	goto out;
@@ -397,18 +421,10 @@ out:
 	return 0;
 }
 
-static const struct of_device_id spidev_dt_ids[] = {
-        { .compatible = "rohm,dh2228fv" },
-        {},
-};
-
-MODULE_DEVICE_TABLE(of, spidev_dt_ids);
-
 static struct spi_driver mcp3002_driver = {
 	.driver		= { 
-		.name	= "spidev", 
-		.owner  = THIS_MODULE,
-		.of_match_table = of_match_ptr(spidev_dt_ids),
+		.name	= KBUILD_MODNAME, 
+		.owner  = THIS_MODULE
 	},
 	.probe		= snd_mcp3002_probe,
 	.remove		= snd_mcp3002_remove,
