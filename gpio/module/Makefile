@@ -6,5 +6,6 @@ all:
 	$(MAKE) -C $(KDIR) M=$(PWD) modules
 install: all
 	$(MAKE) -C $(KDIR) M=$(PWD) modules_install
+	depmod -a
 clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
