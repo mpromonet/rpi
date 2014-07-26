@@ -244,8 +244,7 @@ static void my_timer_callback( unsigned long data )
 	
 	spin_unlock(&chip->lock);
 
-	if (status)
-		snd_pcm_period_elapsed(chip->substream);
+	snd_pcm_period_elapsed(chip->substream);
 
 	retval = mod_timer( &chip->timer, jiffies + msecs_to_jiffies(200) );
 	if (retval) 
@@ -423,7 +422,7 @@ out:
 
 static struct spi_driver mcp3002_driver = {
 	.driver		= { 
-		.name	= KBUILD_MODNAME, 
+		.name	= "spidev", 
 		.owner  = THIS_MODULE
 	},
 	.probe		= snd_mcp3002_probe,
@@ -454,4 +453,4 @@ module_exit(mcp3002_exit);
 MODULE_AUTHOR("MPR");
 MODULE_DESCRIPTION("Sound driver for MCP3002");
 MODULE_LICENSE("GPL");
-MODULE_ALIAS("spi:spidev");
+MODULE_ALIAS("spi:" KBUILD_MODNAME);
