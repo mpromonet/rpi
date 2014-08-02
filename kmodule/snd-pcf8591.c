@@ -20,11 +20,7 @@
 #include <sound/i2c.h>
 #include <sound/pcm.h>
 
-static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX; 
-static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR; 
-
 /* Insmod parameters */
-
 static int input_mode;
 module_param(input_mode, int, 0);
 MODULE_PARM_DESC(input_mode,
@@ -33,6 +29,14 @@ MODULE_PARM_DESC(input_mode,
         " 1 = three differential inputs\n"
         " 2 = single ended and differential mixed\n"
         " 3 = two differential inputs\n");
+
+static int index = SNDRV_DEFAULT_IDX1; 
+module_param(index, int, 0444);
+MODULE_PARM_DESC(index, "Index value for soundcard.");
+ 
+static char *id = KBUILD_MODNAME; 
+module_param(id, charp, 0444);
+MODULE_PARM_DESC(id, "ID string for soundcard.");
 
 /*
  * The PCF8591 control byte
@@ -77,7 +81,6 @@ struct pcf8591_data
 	struct i2c_client *client;
 	struct snd_card * card;
 	struct snd_pcm * pcm;
-	int dsp_minor;
 		
         struct mutex update_lock;
 	
@@ -125,103 +128,12 @@ static int pcf8591_read_channel(struct pcf8591_data *data, int channel)
 static void timer_function(unsigned long ptr)
 {
 	struct pcf8591_data *data = (struct pcf8591_data *)(ptr);
-	printk("timer_function dev:%d date:%X client:%X\n",data->dsp_minor, data, data->client);		
+	printk("timer_function data:%X client:%X\n", data, data->client);		
 //	pcf8591_read_channel(data,0);		
 		
 	
 	mod_timer(&data->htimer, jiffies + msecs_to_jiffies(period));
 }
-
-static int dev_open(struct inode *inode, struct file *file)
-{
-	printk("dev_open :%d,%d\n",imajor(inode),iminor(inode));			 
-	return 0;
-}
-static int dev_release(struct inode *inode, struct file *file)
-{
-	printk("dev_release :%d,%d\n",imajor(inode),iminor(inode));			 
-	return 0;
-}
-
-static ssize_t dev_read(struct file *file, char __user *buf, size_t count, loff_t *off)
-{
-	struct inode *inode = file_inode(file);
-	
-	printk("dev_read :%d,%d\n",imajor(inode),iminor(inode));			 	
-        return 0; 
-}
-
-static long dev_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
-{
-	struct inode *inode = file_inode(file);
-        int val = 0;
-        int __user *p = (int __user *)arg;
-
-	printk("dev_ioctl :%d,%d cmd:%X arg:%X\n",imajor(inode),iminor(inode),cmd, arg);			 
-	
-        switch (cmd) 
-	{
-		case SNDCTL_DSP_SUBDIVIDE:
-		case SNDCTL_DSP_SETFRAGMENT:
-		case SNDCTL_DSP_SETDUPLEX:
-		case SNDCTL_DSP_POST:
-			printk("dev_ioctl : ignore command\n");
-			return 0;
-
-		case SNDCTL_DSP_SETFMT:
-			if (get_user(val, p))
-				return -EFAULT;						
-			printk("dev_ioctl : SNDCTL_DSP_SETFMT:%d\n",val);			
-			return 0;			
-		
-		case SNDCTL_DSP_GETBLKSIZE:
-			val = 4096;
-			if (put_user(val, p))
-				return -EFAULT;
-			printk("dev_ioctl : SNDCTL_DSP_GETBLKSIZE:%d\n", val);
-			return 0;
-
-		case SNDCTL_DSP_GETFMTS:
-			val = AFMT_S16_LE | AFMT_U8;
-			if (put_user(val, p))
-				return -EFAULT;
-			printk("dev_ioctl : SNDCTL_DSP_GETFMTS:%d\n", val);
-			return 0;
-
-		case SNDCTL_DSP_GETCAPS:
-			val = DSP_CAP_DUPLEX | DSP_CAP_BATCH;
-			if (put_user(val, p))
-				return -EFAULT;
-			printk("dev_ioctl : SNDCTL_DSP_GETCAPS:%d\n", val);
-			return 0;
-
-		case SNDCTL_DSP_SPEED:
-			val = 1000/period;
-			if (put_user(val, p))
-				return -EFAULT;
-			printk("dev_ioctl : SNDCTL_DSP_SPEED:%d\n", val);
-			return 0;
-
-		case SNDCTL_DSP_CHANNELS:
-		case SNDCTL_DSP_STEREO:
-			val = 1;
-			if (put_user(val, p))
-				return -EFAULT;
-			printk("dev_ioctl : SNDCTL_DSP_CHANNELS/SNDCTL_DSP_STEREO:%d\n", val);
-			return 0;			
-        }
-
-	printk("dev_ioctl : not supported command\n");
-        return -EINVAL;
-}
-
-static const struct file_operations dev_fileops = {
-         .owner          = THIS_MODULE,
-         .read           = dev_read,
-         .unlocked_ioctl  = dev_ioctl,
-         .open           = dev_open,
-         .release        = dev_release,
-};
 
 static int card_open(struct inode *inode, struct file *file)
 {
@@ -241,7 +153,7 @@ static ssize_t card_read(struct file *file, char __user *buf, size_t len, loff_t
 	char outputPtr[128];
 	
 	struct pcf8591_data *data = snd_lookup_minor_data(iminor(inode),SNDRV_DEVICE_TYPE_PCM_CAPTURE);		
-	printk("card_open :%d,%d data:%X minor:%d\n",imajor(inode),iminor(inode),data, data->dsp_minor);			 
+	printk("card_open :%d,%d data:%X\n",imajor(inode),iminor(inode),data);			 
 
 	snprintf(outputPtr, sizeof(outputPtr)-1,"%d\n",pcf8591_read_channel(data,0));
         if (copy_to_user(buf, outputPtr, strlen(outputPtr)))
@@ -253,37 +165,57 @@ static ssize_t card_read(struct file *file, char __user *buf, size_t len, loff_t
 	return strlen(outputPtr);
 }
 
+static long card_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	struct inode *inode = file_inode(file);
+        int val = 0;
+        int __user *p = (int __user *)arg;
+	struct snd_pcm_file *pcm_file = file->private_data;
+
+	printk("card_ioctl :%d,%d cmd:%X arg:%X\n",imajor(inode),iminor(inode),cmd, arg);			 
+	
+	if (((cmd >> 8) & 0xff) != 'A')
+		return -ENOTTY;
+	
+	return 0;
+}
+
 static const struct file_operations card_fileops = {
-         .owner          = THIS_MODULE,
-         .open           = card_open,
-         .read           = card_read,
-         .release        = card_release,
+        .owner          = THIS_MODULE,
+        .open           = card_open,
+        .read           = card_read,
+        .release        = card_release,
+	.unlocked_ioctl =       card_ioctl,
 };
 
 static int pcf8591_probe(struct i2c_client *client, const struct i2c_device_id *i2cid)
 {
 	struct pcf8591_data *data = NULL;
         int err = 0;
-	int dev = 1;
 	 
 	printk("pcf8591_probe %s %X %s\n", i2cid->name, client->addr << 1, client->adapter->name);			 
  
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_SMBUS_BYTE_DATA))
 		return -EIO;
 
+        /* Initialize the PCF8591 data structure */
         data = devm_kzalloc(&client->dev, sizeof(struct pcf8591_data), GFP_KERNEL);
         if (!data)
 	{
 		printk("devm_kzalloc fails\n");		
                 return -ENOMEM;
-	}
- 
+	} 
         i2c_set_clientdata(client, data);
         mutex_init(&data->update_lock);
-   
+
+        /* Initialize the PCF8591 chip */
+	printk("pcf8591_init_client %s %X\n", i2cid->name, client);			 
+        pcf8591_init_client(client);
+	
+	
 	/* create the SND card */
 	printk("snd_card_create %s\n", i2cid->name);			 
-	err = snd_card_create(index[dev], id[dev], THIS_MODULE, 0, &data->card);
+	err = snd_card_create(index, id, THIS_MODULE, 0, &data->card);
         if (err < 0)
 	{
 		printk("snd_card_create fails :%d\n",err);			 
@@ -294,7 +226,7 @@ static int pcf8591_probe(struct i2c_client *client, const struct i2c_device_id *
 	strcpy(data->card->shortname, KBUILD_MODNAME);
 	
 	printk("snd_pcm_new %s\n", i2cid->name);			 
-	err = snd_pcm_new(data->card, "Capture", 0, 0, 1, &data->pcm);
+	err = snd_pcm_new(data->card, KBUILD_MODNAME "_PCM", 0, 0, 1, &data->pcm);
         if (err < 0) 
 	{
 		printk("snd_pcm_new fails :%d\n",err);			 
@@ -309,20 +241,9 @@ static int pcf8591_probe(struct i2c_client *client, const struct i2c_device_id *
 		snd_card_free(data->card);		
                 return err;
         }	 
-	 
-        /* Initialize the PCF8591 chip */
-	printk("pcf8591_init_client %s %X\n", i2cid->name, client);			 
-        pcf8591_init_client(client);
-	
-	/* create DSP device*/	 
-	printk("register_sound_dsp %s\n", i2cid->name);			 
-	if ((data->dsp_minor = register_sound_dsp(&dev_fileops, -1)) < 0) 
-	{	
-		printk("register_sound_dsp\n");		
-	}
-	
+	 		
 	/* register device */
-	printk("snd_register_device %s %d\n", i2cid->name, data->card->number);			 
+	printk("snd_register_device SNDRV_DEVICE_TYPE_PCM_CAPTURE %s %d\n", i2cid->name, data->card->number);			 
 	err = snd_register_device(SNDRV_DEVICE_TYPE_PCM_CAPTURE, data->card, data->card->number, &card_fileops, data, KBUILD_MODNAME);
         if (err < 0) 
 	{
@@ -330,8 +251,6 @@ static int pcf8591_probe(struct i2c_client *client, const struct i2c_device_id *
 		snd_card_free(data->card);		
                 return err;
         }	 
-	
-	pcf8591_read_channel(data,0);
 	
 	/* start timer */
 	printk("setup_timer %s\n", i2cid->name);			 
@@ -349,7 +268,6 @@ static int pcf8591_probe(struct i2c_client *client, const struct i2c_device_id *
         struct pcf8591_data *data = i2c_get_clientdata(client);
  	 
 	del_timer(&data->htimer);
-	unregister_sound_dsp(data->dsp_minor);
 	snd_unregister_device(SNDRV_DEVICE_TYPE_PCM_CAPTURE,data->card,data->card->number);
 	snd_card_disconnect(data->card);
 	mutex_destroy (&data->update_lock);
@@ -385,7 +303,6 @@ static int pcf8591_probe(struct i2c_client *client, const struct i2c_device_id *
          i2c_del_driver(&pcf8591_driver);
  }
  
- MODULE_AUTHOR("MPR");
  MODULE_DESCRIPTION("ALSA PCF8591 driver");
  MODULE_LICENSE("GPL");
  
