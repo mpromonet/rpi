@@ -135,57 +135,67 @@ static void timer_function(unsigned long ptr)
 	mod_timer(&data->htimer, jiffies + msecs_to_jiffies(period));
 }
 
-static int card_open(struct inode *inode, struct file *file)
+static struct snd_pcm_hardware snd_snd_pcf8591_capture_hw = {
+          .info = (SNDRV_PCM_INFO_INTERLEAVED  |
+                   SNDRV_PCM_INFO_BLOCK_TRANSFER ),
+          .formats =          SNDRV_PCM_FMTBIT_S16_LE,
+          .rates =            SNDRV_PCM_RATE_8000_48000,
+          .rate_min =         8000,
+          .rate_max =         48000,
+          .channels_min =     1,
+          .channels_max =     2,
+          .buffer_bytes_max = 32768,
+          .period_bytes_min = 4096,
+          .period_bytes_max = 32768,
+          .periods_min =      1,
+          .periods_max =      1024,
+  };
+  
+static int snd_pcf8591_capture_open(struct snd_pcm_substream *substream)
 {
-	printk("card_open :%d,%d\n",imajor(inode),iminor(inode));		
-        return 0; 
-}
-
-static int card_release(struct inode *inode, struct file *file)
-{
-	printk("card_release :%d,%d\n",imajor(inode),iminor(inode));			 
+        struct pcf8591_data *data = snd_pcm_substream_chip(substream);
+	struct snd_pcm_runtime *runtime = substream->runtime;	
+	runtime->hw = snd_snd_pcf8591_capture_hw;
+	
+	printk("snd_pcf8591_capture_open data:%X client:%X\n", data, data->client);
 	return 0;
 }
 
-static ssize_t card_read(struct file *file, char __user *buf, size_t len, loff_t *off)
+static int snd_pcf8591_capture_close(struct snd_pcm_substream *substream)
 {
-	struct inode *inode = file_inode(file);
-	char outputPtr[128];
-	
-	struct pcf8591_data *data = snd_lookup_minor_data(iminor(inode),SNDRV_DEVICE_TYPE_PCM_CAPTURE);		
-	printk("card_open :%d,%d data:%X\n",imajor(inode),iminor(inode),data);			 
-
-	snprintf(outputPtr, sizeof(outputPtr)-1,"%d\n",pcf8591_read_channel(data,0));
-        if (copy_to_user(buf, outputPtr, strlen(outputPtr)))
-	{
-		printk("copy_to_user fails\n");		
-		return -EFAULT;
-	}
-	
-	return strlen(outputPtr);
-}
-
-static long card_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
-{
-	struct inode *inode = file_inode(file);
-        int val = 0;
-        int __user *p = (int __user *)arg;
-	struct snd_pcm_file *pcm_file = file->private_data;
-
-	printk("card_ioctl :%d,%d cmd:%X arg:%X\n",imajor(inode),iminor(inode),cmd, arg);			 
-	
-	if (((cmd >> 8) & 0xff) != 'A')
-		return -ENOTTY;
-	
+        struct pcf8591_data *data = snd_pcm_substream_chip(substream);
+	printk("snd_pcf8591_capture_close data:%X client:%X\n", data, data->client);		
 	return 0;
 }
 
-static const struct file_operations card_fileops = {
-        .owner          = THIS_MODULE,
-        .open           = card_open,
-        .read           = card_read,
-        .release        = card_release,
-	.unlocked_ioctl =       card_ioctl,
+static int snd_pcf8591_hw_params(struct snd_pcm_substream *substream,
+                               struct snd_pcm_hw_params *hw_params)
+{
+        return snd_pcm_lib_malloc_pages(substream, params_buffer_bytes(hw_params));
+}
+
+static snd_pcm_uframes_t snd_pcf8591_capture_pointer(struct snd_pcm_substream *substream)
+{
+        unsigned long flags;
+        snd_pcm_uframes_t hwptr_done = 0;
+        struct pcf8591_data *data = snd_pcm_substream_chip(substream);
+	struct snd_pcm_runtime *runtime = substream->runtime;	
+	unsigned int ptr = 0;
+	
+	printk("snd_pcf8591_capture_pointer data:%X client:%X\n", data, data->client);		
+
+        return bytes_to_frames(runtime, ptr);
+}
+	
+static struct snd_pcm_ops pcm_capture_ops = {
+        .open =         snd_pcf8591_capture_open,
+        .close =        snd_pcf8591_capture_close,
+        .ioctl =        snd_pcm_lib_ioctl,
+        .hw_params =    snd_pcf8591_hw_params,
+        .hw_free =      snd_pcm_lib_free_pages,
+        .prepare =      NULL,
+        .trigger =      NULL,
+        .pointer =      snd_pcf8591_capture_pointer,
 };
 
 static int pcf8591_probe(struct i2c_client *client, const struct i2c_device_id *i2cid)
@@ -225,6 +235,7 @@ static int pcf8591_probe(struct i2c_client *client, const struct i2c_device_id *
 	strcpy(data->card->driver, KBUILD_MODNAME);
 	strcpy(data->card->shortname, KBUILD_MODNAME);
 	
+	/* create PCM capture device */
 	printk("snd_pcm_new %s\n", i2cid->name);			 
 	err = snd_pcm_new(data->card, KBUILD_MODNAME "_PCM", 0, 0, 1, &data->pcm);
         if (err < 0) 
@@ -232,7 +243,11 @@ static int pcf8591_probe(struct i2c_client *client, const struct i2c_device_id *
 		printk("snd_pcm_new fails :%d\n",err);			 
                 return err;
         }
+	sprintf(data->pcm->name, "DSP");
+        data->pcm->private_data = data;	
+	snd_pcm_set_ops(data->pcm, SNDRV_PCM_STREAM_CAPTURE, &pcm_capture_ops);
 	
+	/* register the card */
 	printk("snd_card_register %s\n", i2cid->name);			 
 	err = snd_card_register(data->card);
         if (err < 0) 
@@ -241,17 +256,7 @@ static int pcf8591_probe(struct i2c_client *client, const struct i2c_device_id *
 		snd_card_free(data->card);		
                 return err;
         }	 
-	 		
-	/* register device */
-	printk("snd_register_device SNDRV_DEVICE_TYPE_PCM_CAPTURE %s %d\n", i2cid->name, data->card->number);			 
-	err = snd_register_device(SNDRV_DEVICE_TYPE_PCM_CAPTURE, data->card, data->card->number, &card_fileops, data, KBUILD_MODNAME);
-        if (err < 0) 
-	{
-		printk("snd_register_device fails :%d\n",err);	
-		snd_card_free(data->card);		
-                return err;
-        }	 
-	
+	 			
 	/* start timer */
 	printk("setup_timer %s\n", i2cid->name);			 
 	setup_timer( &data->htimer, timer_function, (unsigned long)data);
@@ -268,7 +273,6 @@ static int pcf8591_probe(struct i2c_client *client, const struct i2c_device_id *
         struct pcf8591_data *data = i2c_get_clientdata(client);
  	 
 	del_timer(&data->htimer);
-	snd_unregister_device(SNDRV_DEVICE_TYPE_PCM_CAPTURE,data->card,data->card->number);
 	snd_card_disconnect(data->card);
 	mutex_destroy (&data->update_lock);
         return 0;
@@ -291,11 +295,12 @@ static int pcf8591_probe(struct i2c_client *client, const struct i2c_device_id *
  
  static int __init pcf8591_init(void)
  {
-         if (input_mode < 0 || input_mode > 3) {
-                 pr_warn("invalid input_mode (%d)\n", input_mode);
-                 input_mode = 0;
-         }
-         return i2c_add_driver(&pcf8591_driver);
+        if (input_mode < 0 || input_mode > 3) 
+	{
+                pr_warn("invalid input_mode (%d)\n", input_mode);
+                input_mode = 0;
+        }
+        return i2c_add_driver(&pcf8591_driver);
  }
  
  static void __exit pcf8591_exit(void)
