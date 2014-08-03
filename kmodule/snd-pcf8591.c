@@ -76,7 +76,7 @@ MODULE_PARM_DESC(id, "ID string for soundcard.");
 /* Conversions */
 #define REG_TO_SIGNED(reg)      (((reg) & 0x80) ? ((reg) - 256) : (reg))
 
-static int period = 1250; // ms
+static int period = 125; // us
 
 struct my_work_t
 {
@@ -89,7 +89,8 @@ struct pcf8591_data
 	struct i2c_client *client;
 	struct snd_card * card;
 	struct snd_pcm * pcm;
-		
+	struct snd_pcm_substream *substream;
+	
         struct mutex update_lock;
 	
         u8 control;
@@ -98,6 +99,7 @@ struct pcf8591_data
 	struct timer_list htimer;
 	struct workqueue_struct *wq;
 	struct my_work_t *work;
+	int offset;
 };
   
 static void pcf8591_init_client(struct i2c_client *client)
@@ -119,7 +121,6 @@ static int pcf8591_read_channel(struct pcf8591_data *data, int channel)
         mutex_lock(&data->update_lock);
         if ((data->control & PCF8591_CONTROL_AICH_MASK) != channel) 
 	{
-		printk("select channel:%d\n",channel);	
 		data->control = (data->control & ~PCF8591_CONTROL_AICH_MASK) | channel;
 		i2c_smbus_write_byte(data->client, data->control);
 		i2c_smbus_read_byte(data->client); 
@@ -133,34 +134,40 @@ static int pcf8591_read_channel(struct pcf8591_data *data, int channel)
                  return 10 * value;
 }
 
+static void timer_function(unsigned long ptr)
+{
+	struct pcf8591_data *data = (struct pcf8591_data *)(ptr);	
+	queue_work(data->wq, (struct work_struct *)data->work);
+	
+	mod_timer(&data->htimer, jiffies + usecs_to_jiffies(period));
+}
+
 static void pcf8591_work(struct work_struct *work)
 {
 	struct my_work_t *my_work = (struct my_work_t *)work;
 	struct pcf8591_data *data =  my_work->data;
-	printk("pcf8591_work val:%d\n", pcf8591_read_channel(data,0));				
-}
-
-static void timer_function(unsigned long ptr)
-{
-	struct pcf8591_data *data = (struct pcf8591_data *)(ptr);
-	printk("timer_function data:%X client:%X\n", (unsigned int)data, (unsigned int)data->client);
+	struct snd_pcm_runtime *runtime = NULL;
 	
-	queue_work(data->wq, (struct work_struct *)data->work);
-	
-	mod_timer(&data->htimer, jiffies + msecs_to_jiffies(period));
+	if (data->substream)
+	{
+		runtime = data->substream->runtime;
+		if (data->offset >= 128) data->offset = 0;
+		runtime->dma_area[data->offset++] = pcf8591_read_channel(data,0);
+		runtime->dma_area[data->offset++] = pcf8591_read_channel(data,1);
+		snd_pcm_period_elapsed(data->substream);
+	}
 }
 
 static struct snd_pcm_hardware snd_snd_pcf8591_capture_hw = {
-          .info = (SNDRV_PCM_INFO_INTERLEAVED  |
-                   SNDRV_PCM_INFO_BLOCK_TRANSFER ),
-          .formats =          SNDRV_PCM_FMTBIT_S16_LE,
-          .rates =            SNDRV_PCM_RATE_8000_48000,
+          .info = (SNDRV_PCM_INFO_INTERLEAVED  |  SNDRV_PCM_INFO_BLOCK_TRANSFER ),
+          .formats =          SNDRV_PCM_FMTBIT_U8,
+          .rates =            SNDRV_PCM_RATE_8000,
           .rate_min =         8000,
-          .rate_max =         48000,
+          .rate_max =         8000,
           .channels_min =     1,
-          .channels_max =     2,
+          .channels_max =     4,
           .buffer_bytes_max = 32768,
-          .period_bytes_min = 4096,
+          .period_bytes_min = 1024,
           .period_bytes_max = 32768,
           .periods_min =      1,
           .periods_max =      1024,
@@ -171,13 +178,17 @@ static int snd_pcf8591_capture_open(struct snd_pcm_substream *substream)
         struct pcf8591_data *data = snd_pcm_substream_chip(substream);
 	struct snd_pcm_runtime *runtime = substream->runtime;	
 	
-	printk("snd_pcf8591_capture_open data:%X client:%X\n", (unsigned int)data, (unsigned int)data->client);
+	printk("snd_pcf8591_capture_open data:%X substream:%X\n", (unsigned int)data, (unsigned int)substream);
+	data->substream = substream;
+	data->offset = 0;
+	
+	/* fill hardware */
 	runtime->hw = snd_snd_pcf8591_capture_hw;
 	
 	/* start timer */
 	printk("snd_pcf8591_capture_open setup_timer\n");			 
 	setup_timer( &data->htimer, timer_function, (unsigned long)data);
-	if (mod_timer( &data->htimer, jiffies + msecs_to_jiffies(period))) 
+	if (mod_timer( &data->htimer, jiffies + usecs_to_jiffies(period))) 
 	{
 		printk("Error in mod_timer\n");	
 	}
@@ -188,7 +199,8 @@ static int snd_pcf8591_capture_open(struct snd_pcm_substream *substream)
 static int snd_pcf8591_capture_close(struct snd_pcm_substream *substream)
 {
         struct pcf8591_data *data = snd_pcm_substream_chip(substream);
-	printk("snd_pcf8591_capture_close data:%X client:%X\n", (unsigned int)data, (unsigned int)data->client);		
+	printk("snd_pcf8591_capture_close data:%X substream:%X\n", (unsigned int)data, (unsigned int)substream);
+	data->substream = NULL;	
 	
 	del_timer(&data->htimer);	
 	return 0;
@@ -225,9 +237,9 @@ static snd_pcm_uframes_t snd_pcf8591_capture_pointer(struct snd_pcm_substream *s
 {
         struct pcf8591_data *data = snd_pcm_substream_chip(substream);
 	struct snd_pcm_runtime *runtime = substream->runtime;	
-	unsigned int ptr = 0;
+	unsigned int ptr = data->offset;
 	
-	printk("snd_pcf8591_capture_pointer data:%X\n", (unsigned int)data);		
+//	printk("snd_pcf8591_capture_pointer data:%X offset:%d\n", (unsigned int)data, ptr);		
 
         return bytes_to_frames(runtime, ptr);
 }
