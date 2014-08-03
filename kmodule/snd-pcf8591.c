@@ -12,6 +12,7 @@
 #include <linux/soundcard.h>
 #include <linux/timer.h>
 #include <linux/delay.h>
+#include <linux/workqueue.h>
 
 #include <asm/io.h>
 
@@ -76,6 +77,13 @@ MODULE_PARM_DESC(id, "ID string for soundcard.");
 #define REG_TO_SIGNED(reg)      (((reg) & 0x80) ? ((reg) - 256) : (reg))
 
 static int period = 1250; // ms
+
+struct my_work_t
+{
+	struct work_struct my_work;
+	struct pcf8591_data *    data;
+};
+
 struct pcf8591_data 
 {
 	struct i2c_client *client;
@@ -88,6 +96,8 @@ struct pcf8591_data
         u8 aout;
 	
 	struct timer_list htimer;
+	struct workqueue_struct *wq;
+	struct my_work_t *work;
 };
   
 static void pcf8591_init_client(struct i2c_client *client)
@@ -105,9 +115,8 @@ static void pcf8591_init_client(struct i2c_client *client)
 static int pcf8591_read_channel(struct pcf8591_data *data, int channel)
 {	
         u8 value = 0;
-	printk("pcf8591_read_channel date:%X client:%X channel:%d\n",  data, data->client, channel);
+	
         mutex_lock(&data->update_lock);
-
         if ((data->control & PCF8591_CONTROL_AICH_MASK) != channel) 
 	{
 		printk("select channel:%d\n",channel);	
@@ -116,20 +125,27 @@ static int pcf8591_read_channel(struct pcf8591_data *data, int channel)
 		i2c_smbus_read_byte(data->client); 
         }
  	value = i2c_smbus_read_byte(data->client);
- 
         mutex_unlock(&data->update_lock);
-	printk("pcf8591_read_channel value:%d\n", value);		
+	
         if ((channel == 2 && input_mode == 2) || (channel != 3 && (input_mode == 1 || input_mode == 3)))
                  return 10 * REG_TO_SIGNED(value);
         else
                  return 10 * value;
 }
 
+static void pcf8591_work(struct work_struct *work)
+{
+	struct my_work_t *my_work = (struct my_work_t *)work;
+	struct pcf8591_data *data =  my_work->data;
+	printk("pcf8591_work val:%d\n", pcf8591_read_channel(data,0));				
+}
+
 static void timer_function(unsigned long ptr)
 {
 	struct pcf8591_data *data = (struct pcf8591_data *)(ptr);
-	printk("timer_function data:%X client:%X\n", data, data->client);		
-//	printk("timer_function val:%d\n", pcf8591_read_channel(data,0));				
+	printk("timer_function data:%X client:%X\n", (unsigned int)data, (unsigned int)data->client);
+	
+	queue_work(data->wq, (struct work_struct *)data->work);
 	
 	mod_timer(&data->htimer, jiffies + msecs_to_jiffies(period));
 }
@@ -155,7 +171,7 @@ static int snd_pcf8591_capture_open(struct snd_pcm_substream *substream)
         struct pcf8591_data *data = snd_pcm_substream_chip(substream);
 	struct snd_pcm_runtime *runtime = substream->runtime;	
 	
-	printk("snd_pcf8591_capture_open data:%X client:%X\n", data, data->client);
+	printk("snd_pcf8591_capture_open data:%X client:%X\n", (unsigned int)data, (unsigned int)data->client);
 	runtime->hw = snd_snd_pcf8591_capture_hw;
 	
 	/* start timer */
@@ -172,7 +188,7 @@ static int snd_pcf8591_capture_open(struct snd_pcm_substream *substream)
 static int snd_pcf8591_capture_close(struct snd_pcm_substream *substream)
 {
         struct pcf8591_data *data = snd_pcm_substream_chip(substream);
-	printk("snd_pcf8591_capture_close data:%X client:%X\n", data, data->client);		
+	printk("snd_pcf8591_capture_close data:%X client:%X\n", (unsigned int)data, (unsigned int)data->client);		
 	
 	del_timer(&data->htimer);	
 	return 0;
@@ -182,7 +198,7 @@ static int snd_pcf8591_hw_params(struct snd_pcm_substream *substream,
                                struct snd_pcm_hw_params *hw_params)
 {
         struct pcf8591_data *data = snd_pcm_substream_chip(substream);
-	printk("snd_pcf8591_hw_params data:%X client:%X\n", data, data->client);		
+	printk("snd_pcf8591_hw_params data:%X\n", (unsigned int)data);		
 	printk("snd_pcf8591_hw_params flags:%X\n", hw_params->flags);		
 	printk("snd_pcf8591_hw_params rmask:%X\n", hw_params->rmask);		
 	printk("snd_pcf8591_hw_params cmask:%X\n", hw_params->cmask);		
@@ -194,26 +210,24 @@ static int snd_pcf8591_hw_params(struct snd_pcm_substream *substream,
 static int snd_pcf8591_prepare(struct snd_pcm_substream *substream)
 {
         struct pcf8591_data *data = snd_pcm_substream_chip(substream);
-	printk("snd_pcf8591_prepare data:%X client:%X\n", data, data->client);	
+	printk("snd_pcf8591_prepare data:%X\n", (unsigned int)data);	
 	return 0;
 }
 
 static int snd_pcf8591_trigger(struct snd_pcm_substream *substream, int cmd)
 {
         struct pcf8591_data *data = snd_pcm_substream_chip(substream);
-	printk("snd_pcf8591_trigger data:%X client:%X\n", data, data->client);		
+	printk("snd_pcf8591_trigger data:%X\n", (unsigned int)data);		
 	return 0;
 }
 
 static snd_pcm_uframes_t snd_pcf8591_capture_pointer(struct snd_pcm_substream *substream)
 {
-        unsigned long flags;
-        snd_pcm_uframes_t hwptr_done = 0;
         struct pcf8591_data *data = snd_pcm_substream_chip(substream);
 	struct snd_pcm_runtime *runtime = substream->runtime;	
 	unsigned int ptr = 0;
 	
-	printk("snd_pcf8591_capture_pointer data:%X client:%X\n", data, data->client);		
+	printk("snd_pcf8591_capture_pointer data:%X\n", (unsigned int)data);		
 
         return bytes_to_frames(runtime, ptr);
 }
@@ -250,7 +264,7 @@ static int pcf8591_probe(struct i2c_client *client, const struct i2c_device_id *
         mutex_init(&data->update_lock);
 
         /* Initialize the PCF8591 chip */
-	printk("pcf8591_init_client %s %X\n", i2cid->name, client);			 
+	printk("pcf8591_init_client %s %X\n", i2cid->name, (unsigned int)client);			 
         pcf8591_init_client(client);	
 	
 	/* create the SND card */
@@ -283,7 +297,25 @@ static int pcf8591_probe(struct i2c_client *client, const struct i2c_device_id *
 		printk("snd_pcm_lib_preallocate_pages_for_all fails :%d\n",err);			 
                 return err;
 	}
-	
+
+	/* create workqueue */
+	data->wq = create_singlethread_workqueue(KBUILD_MODNAME);
+        if (data->wq == NULL) 
+	{
+		err = -ENOMEM;
+		printk("create_singlethread_workqueue fails :%d\n",err);	
+                return err;
+        }
+	data->work = (struct my_work_t *)kmalloc(sizeof(struct my_work_t), GFP_KERNEL);
+	if (!data->work)
+	{
+		err = -ENOMEM;
+		printk("kmalloc fails :%d\n",err);	
+                return err;
+	}
+	INIT_WORK( (struct work_struct *)data->work, pcf8591_work );
+	data->work->data = data;
+
 	/* register the card */
 	printk("snd_card_register %s\n", i2cid->name);			 
 	err = snd_card_register(data->card);
@@ -292,7 +324,7 @@ static int pcf8591_probe(struct i2c_client *client, const struct i2c_device_id *
 		printk("snd_card_register fails :%d\n",err);	
 		snd_card_free(data->card);		
                 return err;
-        }	 
+        }
 	 				
         return 0; 
  }
@@ -301,6 +333,8 @@ static int pcf8591_probe(struct i2c_client *client, const struct i2c_device_id *
  {
         struct pcf8591_data *data = i2c_get_clientdata(client);
  	 
+	destroy_workqueue(data->wq);
+	kfree( (void *)data->work );
 	snd_card_disconnect(data->card);
 	mutex_destroy (&data->update_lock);
         return 0;
