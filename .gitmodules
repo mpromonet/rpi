@@ -1,0 +1,3 @@
+[submodule "v4l2web/mongoose"]
+	path = v4l2web/mongoose
+	url = https://github.com/cesanta/mongoose.git
