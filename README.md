@@ -12,6 +12,7 @@ Repository rpi
 GPU
 -------------
 
-VIDEO
--------------
-- RTSP streamer Video4Linux H264
+kmodule
+-----------
+- snd-pcf8591 : ALSA driver for I2C PCF8591 ADC
+- spi-mcp3002 : ALSA driver for SPI MCP3002 ADC
