@@ -83,7 +83,6 @@ static int snd_mcp3002_set_bitrate(struct snd_mcp3002 *chip)
 {
 	unsigned long ssc_rate = 8000;
 	unsigned long ssc_div;
-	int status;
 	unsigned long ssc_div_max, ssc_div_min;
 
 	/* SSC clock / (bitrate * stereo * 16-bit). */
@@ -214,7 +213,6 @@ static void my_timer_callback( unsigned long data )
 {
 	struct snd_mcp3002 *chip = (struct snd_mcp3002 *)data;
 	struct snd_pcm_runtime *runtime = chip->substream->runtime;
-	u32 status;
 	int offset;
 	int block_size;
 	int next_period;
@@ -283,7 +281,7 @@ static int snd_mcp3002_chip_init(struct snd_mcp3002 *chip)
 		goto out;
 	}
 
-	setup_timer( &chip->timer, my_timer_callback, chip );
+	setup_timer( &chip->timer, my_timer_callback, (unsigned long)chip );
 
 	printk( "Starting timer to fire in 200ms (%ld)\n", jiffies );
 	retval = mod_timer( &chip->timer, jiffies + msecs_to_jiffies(200) );
@@ -345,12 +343,8 @@ static int snd_mcp3002_dev_init(struct snd_card *card,
 	}
 
 	snd_card_set_dev(card, &spi->dev);
-
-	goto out;
-
-out_snd_dev:
-	snd_device_free(card, chip);
 out:
+
 	return retval;
 }
 
@@ -409,15 +403,14 @@ static int snd_mcp3002_remove(struct spi_device *spi)
 {
 	struct snd_card *card = dev_get_drvdata(&spi->dev);
 	struct snd_mcp3002 *chip = card->private_data;
-	int retval;
+	int retval = 0;
 
 	printk("snd_mcp3002_remove\n");
 	
-out:
 	snd_card_free(card);
 	dev_set_drvdata(&spi->dev, NULL);
 
-	return 0;
+	return retval;
 }
 
 static struct spi_driver mcp3002_driver = {
