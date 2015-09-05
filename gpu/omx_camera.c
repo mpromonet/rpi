@@ -3,7 +3,7 @@
 
 
 #include "bcm_host.h"
-#include "interface/vcos/vcos_logging.h"
+//#include "interface/vcos/vcos_logging.h"
 #include "ilclient.h"
 
 int main(int argc, char **argv)
