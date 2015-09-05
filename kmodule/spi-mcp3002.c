@@ -360,7 +360,7 @@ static int snd_mcp3002_probe(struct spi_device *spi)
 	
 	// alsa card initialization
 	snprintf(id, sizeof id, KBUILD_MODNAME);
-	retval = snd_card_create(-1, id, THIS_MODULE, sizeof(struct snd_mcp3002), &card);
+	retval = snd_card_new(&spi->dev, -1, id, THIS_MODULE, sizeof(struct snd_mcp3002), &card);
 	if (retval < 0)
 	{
 		printk("snd_card_create failed:%d\n", retval);

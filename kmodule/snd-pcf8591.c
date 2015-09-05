@@ -281,7 +281,7 @@ static int pcf8591_probe(struct i2c_client *client, const struct i2c_device_id *
 	
 	/* create the SND card */
 	printk("snd_card_create %s\n", i2cid->name);			 
-	err = snd_card_create(index, id, THIS_MODULE, 0, &data->card);
+	err = snd_card_new(&client->dev, index, id, THIS_MODULE, 0, &data->card);
         if (err < 0)
 	{
 		printk("snd_card_create fails :%d\n",err);			 
