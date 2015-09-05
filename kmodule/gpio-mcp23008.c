@@ -286,9 +286,8 @@ static int mcp230xx_remove(struct i2c_client *client)
 	struct mcp23s08 *mcp = i2c_get_clientdata(client);
 	int status;
 
-	status = gpiochip_remove(&mcp->chip);
-	if (status == 0)
-		kfree(mcp);
+	gpiochip_remove(&mcp->chip);
+	kfree(mcp);
 
 	return status;
 }
